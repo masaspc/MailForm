@@ -34,3 +34,4 @@ Thumbs.db
 *.sqlite-*
 /backups/
 /imports/
+!/tests/Fixtures/easymail-2.01.004.sql

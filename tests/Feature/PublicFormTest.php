@@ -298,14 +298,17 @@ class PublicFormTest extends TestCase
         $definition['source_version'] = '2.00.125';
         $form->update(['published' => false, 'definition' => $definition]);
         $this->actingAs(\App\Models\User::create(['name' => '編集者', 'email' => 'editor@example.test', 'password' => 'test-password', 'role' => 'editor']));
-        $editor = app(\App\Services\Admin\FormEditor::class);
-        $this->post(route('admin.publish', $form), ['version' => $editor->version($form)])
+        $edit = route('admin.edit', $form);
+        $version = $this->get($edit)->assertOk()->viewData('version');
+        $this->post(route('admin.publish', $form), ['version' => $version])
+            ->assertRedirect($edit)
             ->assertSessionHasErrors(['definition' => '入力欄の名前またはHTML IDが重複しています: zip']);
         $this->assertFalse($form->refresh()->published);
 
         $definition['source_version'] = '2.00.133';
         $form->update(['definition' => $definition]);
-        $this->post(route('admin.publish', $form), ['version' => $editor->version($form)])->assertSessionHasNoErrors();
+        $version = $this->get($edit)->assertOk()->viewData('version');
+        $this->post(route('admin.publish', $form), ['version' => $version])->assertRedirect($edit)->assertSessionHasNoErrors();
         $this->get('/contact')->assertOk()->assertSee('name="zipzp_address"', false)->assertSee('name="zip"', false);
     }
 

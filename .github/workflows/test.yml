@@ -28,7 +28,7 @@ jobs:
           --health-cmd="if command -v mariadb-admin >/dev/null; then mariadb-admin ping -h localhost -pci-only; else mysqladmin ping -h localhost -pci-only; fi"
           --health-interval=5s --health-timeout=5s --health-retries=30
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962
         with:
           php-version: ${{ matrix.php }}

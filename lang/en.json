@@ -25,6 +25,8 @@
     "郵便番号": "Postal code",
     "都道府県": "Prefecture",
     "市区町村・番地・建物名": "Street address and building",
+    "市区町村・番地": "Street address",
+    "建物名": "Building name",
     "再入力した内容が一致しません。": "The entries do not match.",
     "入力形式を確認してください。": "Check the format of this entry.",
     "使用できない文字が含まれています。": "This entry contains a character that is not allowed.",

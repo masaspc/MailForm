@@ -39,6 +39,13 @@ cat > "$dest/header.blade.php" <<'HTML'
 HTML
 printf '%s\n' '// fictional local measurement' > "$dest/js/ad_cookie.js"
 printf '\n%s\n' '// fictional old input helper' >> "$dest/js/jquery.emform.js"
-printf '\n%s\n' '<!-- fictional form change -->' >> "$dest/form.blade.php"
+cp "$(dirname "$0")"/theme-structure/*.blade.php "$dest/"
+cat >> "$dest/css/style.css" <<'CSS'
+.orchard-pair { display: grid; grid-template-columns: 1fr 2fr; }
+.orchard-key { font-weight: bold; }
+.orchard-picker > .orchard-select { border: 2px solid green; }
+.orchard-actions > div > button { padding: 12px; }
+@media (max-width: 40em) { .orchard-pair { display: block; } }
+CSS
 printf '\n%s\n' '<!-- fictional email change -->' >> "$dest/reply_mail.blade.php"
 printf '%s\n' '// source only' > "$dest/css/notes.scss"

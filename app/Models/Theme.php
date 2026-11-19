@@ -2,18 +2,21 @@
 
 namespace App\Models;
 
+use App\Services\EasyMail\JsonValue;
 use App\Services\ThemeAssets;
+use App\Services\ThemeStructure;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 class Theme extends Model
 {
-    protected $fillable = ['slug', 'name', 'layout', 'header', 'footer', 'assets', 'logo'];
+    protected $fillable = ['slug', 'name', 'layout', 'header', 'footer', 'assets', 'logo', 'structure'];
 
     protected function casts(): array
     {
-        return ['assets' => 'array', 'import_report' => 'array', 'reviewed_at' => 'datetime'];
+        return ['assets' => 'array', 'structure' => 'array', 'structure_overrides' => 'array',
+            'import_report' => 'array', 'reviewed_at' => 'datetime'];
     }
 
     public function editorVersion(): string
@@ -24,6 +27,21 @@ class Theme extends Model
     public function pendingReview(): bool
     {
         return $this->import_report !== null && $this->reviewed_at === null;
+    }
+
+    /** A local choice of the standard layout also survives a slot disappearing from later backups. */
+    public function editedStructureSlots(): array
+    {
+        $labels = ThemeStructure::labels();
+        $overrides = array_intersect_key($this->structure_overrides ?? [], $labels);
+        $inferred = $this->import_report['structure'] ?? [];
+        $current = $this->structure ?? [];
+        foreach (array_keys($labels) as $slot) {
+            if (!JsonValue::same($current[$slot] ?? null, $inferred[$slot] ?? null)) {
+                $overrides[$slot] = true;
+            }
+        }
+        return $overrides;
     }
 
     /** Caller holds the theme row lock. Pause only forms actually published with this theme. */
@@ -46,6 +64,9 @@ class Theme extends Model
             $theme = self::lockForUpdate()->findOrFail($this->getKey());
             if (!$theme->pendingReview()) {
                 return 0;
+            }
+            if (!is_array($theme->structure ?? []) || !ThemeStructure::valid($theme->structure ?? [])) {
+                throw ValidationException::withMessages(['structure' => '部品のタグ・属性・並び順を確認してください。']);
             }
             foreach ($theme->assets ?? [] as $path => $asset) {
                 if (!ThemeAssets::matchesPath($path, $asset) || !ThemeAssets::intact($asset)) {

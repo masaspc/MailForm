@@ -23,6 +23,7 @@ require 'vendor/autoload.php';
 $app = require 'bootstrap/app.php';
 $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
 App\Models\User::create(['email' => 'review@example.test', 'name' => 'Reviewer', 'role' => 'admin', 'password' => 'temporary-fixture']);
+App\Models\Theme::create(['slug' => 'paper-kite', 'name' => '凧の見学', 'layout' => 'gray']);
 PHP
 php -S "127.0.0.1:$port" -t public deploy/almalinux10/review-router.php > "$runtime/server.log" 2>&1 &
 pid=$!
@@ -43,6 +44,23 @@ token=$(php -r 'preg_match("/name=\"_token\" value=\"([^\"]+)\"/", file_get_cont
     --data 'email=review%40example.test&password=temporary-fixture' "$base/admin/login") == 302 ]]
 curl -fsS -b "$runtime/cookies" "$base/admin/themes" > "$runtime/themes"
 grep -q 'テーマ管理' "$runtime/themes"
+edit="$base/admin/themes/paper-kite/edit?component=title"
+curl -fsS -b "$runtime/cookies" "$edit" > "$runtime/component"
+# shellcheck disable=SC2016 # Read the CSRF token and version from the rendered component form.
+read -r component_token component_version < <(php -r '
+    $html = new DOMDocument();
+    $html->loadHTMLFile($argv[1], LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
+    $xpath = new DOMXPath($html);
+    $form = "//form[contains(@action, \"/paper-kite/component\")]";
+    echo $xpath->evaluate("string($form//input[@name=\"_token\"]/@value)"), " ",
+        $xpath->evaluate("string($form//input[@name=\"version\"]/@value)"), PHP_EOL;
+' "$runtime/component")
+[[ -n $component_token && -n $component_version ]]
+[[ $(status -b "$runtime/cookies" --data-urlencode "_token=$component_token" --data-urlencode "version=$component_version" \
+    --data 'slot=title&mode=edit' --data-urlencode 'element[tag]=h2' --data-urlencode 'element[class]=kite-heading' \
+    "$base/admin/themes/paper-kite/component") == 302 ]]
+curl -fsS -b "$runtime/cookies" "$edit" > "$runtime/component"
+grep -q 'value="kite-heading"' "$runtime/component"
 [[ -n $(ls -A "$runtime/sessions") ]]
 for path in /contact /index.php /admin/history /admin/users /assets/form-postal/SOURCE.txt /storage/other; do
     [[ $(status -b "$runtime/cookies" "$base$path") == 404 ]]

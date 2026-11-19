@@ -99,7 +99,7 @@ final class Stylesheet extends StylePropertySanitizer
             }
             $factory = MatcherFactory::singleton();
             $properties = new self($factory, $path, $images);
-            $style = $diagnostics->linkedLogo ? new LinkedLogoRule($factory, $properties, $diagnostics)
+            $style = $diagnostics->linkedLogo || $diagnostics->actionAttributes ? new ThemeStyleRule($factory, $properties, $diagnostics)
                 : new StyleRuleSanitizer($factory->cssSelectorList(), $properties);
             $media = new MediaRule($factory->cssMediaQueryList());
             $media->setRuleSanitizers([$style]); // One responsive block is sufficient; do not process nested at-rules.

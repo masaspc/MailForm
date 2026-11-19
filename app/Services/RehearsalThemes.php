@@ -2,15 +2,16 @@
 
 namespace App\Services;
 
+use App\Services\EasyMail\JsonValue;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
 /** Internal, root-held transfer between the two databases created by the dedicated-host installer. */
 final class RehearsalThemes
 {
-    private const HEADER = ['mailform_rehearsal_themes' => 1];
+    private const HEADER = ['mailform_rehearsal_themes' => 2];
     private const COLUMNS = ['slug', 'name', 'layout', 'header', 'footer', 'source_key', 'assets', 'logo',
-        'import_report', 'reviewed_at', 'created_at', 'updated_at'];
+        'structure', 'structure_overrides', 'import_report', 'reviewed_at', 'created_at', 'updated_at'];
     private const LINE_LIMIT = 16 * 1024 * 1024;
 
     public static function export($output): int
@@ -44,14 +45,19 @@ final class RehearsalThemes
 
     public static function restore($input): int
     {
-        if (self::record($input) !== self::HEADER) {
+        $header = self::record($input);
+        $legacy = $header === ['mailform_rehearsal_themes' => 1];
+        if (!$legacy && $header !== self::HEADER) {
             throw new RuntimeException('テーマの引継ぎ形式を確認してください。');
         }
-        return DB::transaction(function () use ($input) {
+        return DB::transaction(function () use ($input, $legacy) {
             $seen = [];
             $count = 0;
             while (isset(($item = self::record($input))['theme'])) {
                 $row = $item['theme'];
+                if ($legacy) {
+                    $row += ['structure' => null, 'structure_overrides' => null];
+                }
                 $assets = self::manifest($row);
                 foreach ($assets as $path => $descriptor) {
                     $hash = $descriptor['hash'];
@@ -75,7 +81,7 @@ final class RehearsalThemes
                 $existing = DB::table('themes')->select(self::COLUMNS)->where('source_key', $row['source_key'])->lockForUpdate()->first();
                 if ($existing === null) {
                     DB::table('themes')->insert($row);
-                } elseif ((array) $existing != $row) {
+                } elseif (!JsonValue::same(self::decodedRow((array) $existing), self::decodedRow($row))) {
                     throw new RuntimeException('本番に異なる内容のテーマが既にあります。');
                 }
                 $count++;
@@ -87,16 +93,35 @@ final class RehearsalThemes
         });
     }
 
+    /** MySQL can normalize JSON object order and whitespace when it stores the rehearsal row. */
+    private static function decodedRow(array $row): array
+    {
+        foreach (['assets', 'import_report', 'structure', 'structure_overrides'] as $column) {
+            if ($row[$column] !== null) {
+                $row[$column] = json_decode($row[$column], true, flags: JSON_THROW_ON_ERROR);
+            }
+        }
+        return $row;
+    }
+
     private static function manifest(array $row): array
     {
         if (array_diff(array_keys($row), self::COLUMNS) || array_diff(self::COLUMNS, array_keys($row))
             || !is_string($row['slug']) || !ThemeAssets::validSlug($row['slug'])) {
             throw new RuntimeException('引継ぐテーマの項目が正しくありません。');
         }
-        $report = json_decode($row['import_report'], true, flags: JSON_THROW_ON_ERROR);
-        $assets = json_decode($row['assets'] ?? '{}', true, flags: JSON_THROW_ON_ERROR);
+        $row = self::decodedRow($row);
+        $report = $row['import_report'];
+        $assets = $row['assets'] ?? [];
         if (!is_string($report['source_name'] ?? null) || hash('sha256', $report['source_name']) !== $row['source_key'] || !is_array($assets)) {
             throw new RuntimeException('引継ぐテーマの移行元を識別できません。');
+        }
+        $structure = $row['structure'] ?? [];
+        $overrides = $row['structure_overrides'] ?? [];
+        $inferred = $report['structure'] ?? [];
+        if (!is_array($structure) || !ThemeStructure::valid($structure) || !is_array($inferred) || !ThemeStructure::valid($inferred)
+            || !is_array($overrides) || array_diff_key($overrides, ThemeStructure::labels()) || array_filter($overrides, fn ($flag) => $flag !== true)) {
+            throw new RuntimeException('引継ぐテーマの部品設定が正しくありません。');
         }
         foreach ($assets as $path => $asset) {
             if (!is_string($path) || !ThemeAssets::matchesPath($path, $asset)) {

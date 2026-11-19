@@ -8,12 +8,13 @@ use Wikimedia\CSS\Objects\ComponentValueList;
 use Wikimedia\CSS\Objects\CSSObject;
 use Wikimedia\CSS\Objects\Declaration;
 use Wikimedia\CSS\Objects\QualifiedRule;
+use Wikimedia\CSS\Objects\SimpleBlock;
 use Wikimedia\CSS\Objects\Token;
 use Wikimedia\CSS\Parser\Parser;
 use Wikimedia\CSS\Sanitizer\StyleRuleSanitizer;
 use Wikimedia\CSS\Util;
 
-final class LinkedLogoRule extends StyleRuleSanitizer
+final class ThemeStyleRule extends StyleRuleSanitizer
 {
     public function __construct(MatcherFactory $factory, private Stylesheet $properties, private StylesheetReport $report)
     {
@@ -23,10 +24,28 @@ final class LinkedLogoRule extends StyleRuleSanitizer
     protected function doSanitize(CSSObject $object): ?CSSObject
     {
         $rule = parent::doSanitize($object);
-        if (!$rule instanceof QualifiedRule || !str_contains(Util::stringify($rule->getPrelude()), '#logo')) {
+        if (!$rule instanceof QualifiedRule) {
             return $rule;
         }
         $prelude = $rule->getPrelude();
+        if ($this->report->actionAttributes) {
+            // Replace a literal class selector only. Do not rewrite strings or identifiers in other grammar.
+            for ($i = count($prelude) - 1; $i > 0; $i--) {
+                $token = $prelude[$i];
+                $dot = $prelude[$i - 1];
+                if (!$token instanceof Token || $token->type() !== Token::T_IDENT || !isset($this->report->actionAttributes[$token->value()])
+                    || !$dot instanceof Token || $dot->type() !== Token::T_DELIM || $dot->value() !== '.') {
+                    continue;
+                }
+                $attribute = SimpleBlock::newFromDelimiter(Token::T_LEFT_BRACKET);
+                $attribute->getValue()->add(new Token(Token::T_IDENT, $this->report->actionAttributes[$token->value()]));
+                $prelude->remove($i);
+                $prelude[$i - 1] = $attribute;
+            }
+        }
+        if (!$this->report->linkedLogo || !str_contains(Util::stringify($prelude), '#logo')) {
+            return $rule;
+        }
         $selectors = Parser::newFromTokens($prelude->toTokenArray())->parseCommaSeparatedComponentValueList();
         $existing = $aliases = [];
         $logoLink = false;

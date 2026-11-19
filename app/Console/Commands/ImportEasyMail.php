@@ -96,6 +96,14 @@ class ImportEasyMail extends Command
             }
             foreach ($report['themes'] as $name => $theme) {
                 $this->line('独自テーマ '.$this->printable((string) $name).'　元テーマ '.$this->printable($theme['layout'] ?? '推定できません'));
+                $labels = \App\Services\ThemeStructure::labels();
+                foreach ($theme['structure_sources'] ?? [] as $slot => $location) {
+                    $this->line('  構造を推定　'.$this->printable(($labels[$slot] ?? $slot).'　'.$location));
+                }
+                if (!empty($theme['structure_fallbacks'])) {
+                    $this->line('  個別の推定なし（共通または標準の構造を使用）　'.$this->printable(implode('、', array_map(
+                        static fn ($slot) => $labels[$slot] ?? $slot, $theme['structure_fallbacks']))));
+                }
                 foreach (['changed' => '変更', 'added' => '追加', 'removed' => '削除'] as $key => $label) {
                     foreach ($theme['changes'][$key] as $path) {
                         $this->line('  '.$label.' '.$this->printable($path));

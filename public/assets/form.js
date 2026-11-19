@@ -51,8 +51,9 @@ if (entry) {
         });
         validate();
     }
-    for (const field of entry.querySelectorAll('[data-kind="name_and_furigana"]')) {
-        const [name, kana] = field.querySelectorAll('input');
+    for (const name of entry.querySelectorAll('input[data-kana-for]')) {
+        const kana = document.getElementById(name.dataset.kanaFor);
+        if (!kana || kana.form !== entry) continue;
         let previous = '';
         let reading = '';
         let manual = !!kana.value;
@@ -66,7 +67,7 @@ if (entry) {
         });
         name.addEventListener('compositionend', () => {
             if (!manual && reading) {
-                const hiragana = field.dataset.kana === 'hiragana';
+                const hiragana = name.closest('[data-kind]').dataset.kana === 'hiragana';
                 kana.value = previous + Array.from(reading, (char) => {
                     const code = char.codePointAt(0);
                     if (hiragana && code >= 0x30a1 && code <= 0x30f6) return String.fromCodePoint(code - 96);
@@ -80,9 +81,10 @@ if (entry) {
         });
     }
     for (const button of entry.querySelectorAll('[data-lookup]')) {
-        const field = button.closest('fieldset');
-        const [zip, address] = field.querySelectorAll('input');
-        const prefecture = field.querySelector('select[name]');
+        const field = button.closest('[data-kind="zp_address"]');
+        const zip = field.querySelector('[data-address-part="zip"]');
+        const address = field.querySelector('[data-address-part="address"]');
+        const prefecture = field.querySelector('[data-address-part="pref"]');
         const choices = field.querySelector('[data-address-choices]');
         const result = field.querySelector('[data-lookup-result]');
         const digits = () => zip.value.normalize('NFKC').replaceAll('-', '').trim();
@@ -147,12 +149,13 @@ if (entry) {
 }
 const send = document.querySelector('form[data-send="1"]');
 if (send) {
+    const submitters = Array.from(send.elements).filter(element => element.type === 'submit');
     send.addEventListener('submit', (event) => {
         if (!event.submitter?.hasAttribute('formaction')) {
-            for (const button of send.querySelectorAll('button')) button.disabled = true;
+            for (const button of submitters) button.disabled = true;
         }
     });
     window.addEventListener('pageshow', () => {
-        for (const button of send.querySelectorAll('button')) button.disabled = false;
+        for (const button of submitters) button.disabled = false;
     });
 }

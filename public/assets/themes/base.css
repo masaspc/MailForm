@@ -1,3 +1,17 @@
 /* Editable theme styles take precedence over MailForm's layout defaults. */
 @import url("../form.css") layer(mailform);
 @import url("stock.css") layer(mailform);
+
+/* An inferred grid or container supplies the page width and gutters. */
+@layer mailform {
+    body[data-theme-page] main {
+        display: block;
+        min-height: 0;
+        max-width: none;
+        margin: 0;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+    }
+}

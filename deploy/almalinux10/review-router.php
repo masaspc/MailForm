@@ -40,7 +40,7 @@ $allowedRead = $read && (in_array($path, ['/admin/login', '/admin/themes'], true
     || preg_match("~\A/admin/themes/{$slug}/edit\z~", $path)
     || preg_match('~\A/admin/forms/[1-9][0-9]*/preview\z~', $path));
 $allowedPost = $method === 'POST' && (in_array($path, ['/admin/login', '/admin/logout', '/admin/themes'], true)
-    || preg_match("~\A/admin/themes/{$slug}/(?:assets|approve)\z~", $path));
+    || preg_match("~\A/admin/themes/{$slug}/(?:assets|component|approve)\z~", $path));
 $asset = $read && preg_match("~\A/_theme/{$slug}/file/(.+)\z~D", $path, $match);
 if (!$allowedRead && !$allowedPost && !$asset) {
     $deny();

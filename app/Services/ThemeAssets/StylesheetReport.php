@@ -7,7 +7,7 @@ final class StylesheetReport
     private array $groups = [];
     public ?string $backgroundLogo = null;
 
-    public function __construct(public readonly bool $linkedLogo = false) {}
+    public function __construct(public readonly bool $linkedLogo = false, public readonly array $actionAttributes = []) {}
 
     public function record(string $path, array $errors): void
     {

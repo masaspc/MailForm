@@ -122,6 +122,59 @@ class CustomThemeImportTest extends TestCase
         $this->assertStringContainsString('Later copy', $theme->fresh()->header);
     }
 
+    #[TestWith(['2.00.124'])]
+    #[TestWith(['2.00.125'])]
+    #[TestWith(['2.00.133'])]
+    #[TestWith(['2.01.004'])]
+    public function test_template_structure_and_shared_grid_reach_the_original_url_after_approval(string $version): void
+    {
+        $this->backup($version);
+        foreach (glob(__DIR__.'/../Fixtures/theme-structure/*.blade.php') as $file) {
+            copy($file, $this->custom.'/'.basename($file));
+        }
+        $sheet = '.orchard-paper { display: block; margin: auto; } .orchard-back-key.js_orchard_previous { color: teal; }';
+        $grid = 'css/columns.css';
+        $manifestPath = $this->dir.'/application/resources/easymail/'.$version.'-sha256.json';
+        $manifest = json_decode(file_get_contents($manifestPath), true, flags: JSON_THROW_ON_ERROR);
+        $manifest['resources/views/theme/gradation/'.$grid] = hash('sha256', $sheet);
+        file_put_contents($manifestPath, json_encode($manifest, JSON_THROW_ON_ERROR));
+        file_put_contents($this->dir.'/resources/views/theme/gradation/'.$grid, $sheet);
+        file_put_contents($this->custom.'/'.$grid, $sheet);
+        file_put_contents($this->custom.'/layout.blade.php', <<<'BLADE'
+            <html><head><link rel="stylesheet" href="{{ $data->theme_path }}css/columns.css?v=2"></head>
+            <body>@yield("content")</body></html>
+            BLADE);
+        $legacy = DB::connection('legacy');
+        $legacy->getPdo()->exec('ALTER TABLE form_blocks ADD COLUMN html_class TEXT');
+        $legacy->table('form_blocks')->where('id', 8)->update(['html_class' => 'leaf-width 記入欄 js_previous']);
+        $diagnosis = $this->runImport(['--dry-run' => true])['themes']['garden'];
+        $this->assertSame('dl', $diagnosis['structure']['row'][0]['tag']);
+        $this->assertSame('form.blade.php:5', $diagnosis['structure_sources']['row']);
+        $this->assertContains('time', $diagnosis['structure_fallbacks']);
+        $this->assertSame($grid, $diagnosis['stylesheets'][0]);
+        $this->assertDatabaseEmpty('themes');
+        $this->runImport();
+        $this->get('/contact')->assertNotFound();
+        $this->assertSame(1, Theme::sole()->approveForPublication());
+        $gridFile = $this->get('/_theme/garden/file/'.$grid)->assertOk();
+        $gridFile->assertSee('.orchard-back-key[data-mailform-back]', false)->assertDontSee('js_orchard_previous');
+        $html = $this->get('/contact')->assertOk()->getContent();
+        $doc = new \DOMDocument();
+        $doc->loadHTML($html, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
+        $xpath = new \DOMXPath($doc);
+        $input = $xpath->query('//main/section/div/section/form/dl/dt/following-sibling::dd/input[@id="mail"]')->item(0);
+        $this->assertNotNull($input, 'The field belongs directly to the themed row in the nested form.');
+        $classes = explode(' ', $input->getAttribute('class'));
+        $this->assertContains('orchard-mail', $classes);
+        $this->assertContains('leaf-width', $classes);
+        $this->assertContains('記入欄', $classes);
+        $this->assertNotContains('js_previous', $classes);
+        $this->assertSame(1, $xpath->query('//section[@class="orchard-panel"]/following-sibling::div/div/button[@type="submit"]')->length);
+        $report = $this->runImport(['--verify-only' => true]);
+        $this->assertTrue($report['reconciliation']['ok']);
+        $this->assertTrue($report['forms'][0]['same_public_url']);
+    }
+
     public function test_removing_a_stock_image_in_the_next_backup_preserves_an_edited_stylesheets_image(): void
     {
         $this->backup('2.00.125');

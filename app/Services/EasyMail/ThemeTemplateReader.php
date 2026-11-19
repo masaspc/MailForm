@@ -8,6 +8,8 @@ use RuntimeException;
 /** Extract literal HTML without compiling Blade or evaluating PHP. */
 final class ThemeTemplateReader
 {
+    public const MAX_BYTES = 262144;
+
     public string $slotTag;
     public string $omitted;
     public array $warnings = [];
@@ -43,6 +45,14 @@ final class ThemeTemplateReader
         return $this->lines[$parsedLine] ?? max(1, $parsedLine);
     }
 
+    public static function checkedSource(string $path, string $source): string
+    {
+        if (strlen($source) > self::MAX_BYTES || !mb_check_encoding($source, 'UTF-8') || str_contains($source, "\0")) {
+            throw new RuntimeException($path.': 256 KiB 以下の UTF-8 テキストとして読み取れません。');
+        }
+        return $source;
+    }
+
     public function warn(int $line, string $reason, string $source = '', bool $behavior = false): void
     {
         $alreadyInStock = $source !== '' && str_contains($this->reference, $source);
@@ -68,7 +78,7 @@ final class ThemeTemplateReader
         $line = 1;
         $stack = [];
         $blockStart = $blockLine = $tokens = 0;
-        $php = $this->phpRegions($source);
+        $php = self::phpRegions($source);
         preg_match_all('/@end([a-z_]\w*)/i', $source, $ends);
         $customBlocks = array_fill_keys(array_map('strtolower', $ends[1]), true);
         $pattern = '~<!--|<\?|<((?:script|style))\b|\{\{--|\{!!|\{\{|(?<![\w.+%\-])@([a-z_]\w*)~i';
@@ -105,7 +115,7 @@ final class ThemeTemplateReader
                 $behavior = true;
             } elseif ($token === '{{' || $token === '{!!') {
                 $close = $token === '{{' ? '}}' : '!!}';
-                $stop = $this->expressionEnd($source, $end, $close);
+                $stop = self::expressionEnd($source, $end, $close);
                 $expression = $stop === null ? '' : trim(substr($source, $end, $stop - $end));
                 $end = $stop === null ? strlen($source) : $stop + strlen($close);
                 $value = $this->assetExpression($expression);
@@ -119,12 +129,12 @@ final class ThemeTemplateReader
                 $args = '';
                 if (preg_match('/\G[ \t\r\n]*\(/', $source, $open, 0, $end)) {
                     $from = $end + strlen($open[0]);
-                    $stop = $this->expressionEnd($source, $from, ')');
+                    $stop = self::expressionEnd($source, $from, ')');
                     $args = $stop === null ? '' : trim(substr($source, $from, $stop - $from));
                     $end = $stop === null ? strlen($source) : $stop + 1;
                 }
                 if ($directive === 'php' && $args === '') {
-                    $stop = $this->expressionEnd($source, $end, '@endphp');
+                    $stop = self::expressionEnd($source, $end, '@endphp');
                     $end = $stop === null ? strlen($source) : $stop + 7;
                     $reason = 'Blade 内の PHP を除外しました。';
                     $replacement = $this->omitted;
@@ -179,7 +189,7 @@ final class ThemeTemplateReader
     }
 
     /** Keep HTML inside open PHP conditionals within the same omitted region. */
-    private function phpRegions(string $source): array
+    public static function phpRegions(string $source): array
     {
         if (!str_contains($source, '<?')) {
             return [];
@@ -225,7 +235,7 @@ final class ThemeTemplateReader
     }
 
     /** Locate a Blade delimiter outside strings, comments and nested expression delimiters. */
-    private function expressionEnd(string $source, int $from, string $delimiter): ?int
+    public static function expressionEnd(string $source, int $from, string $delimiter): ?int
     {
         $stack = [];
         $pairs = ['(' => ')', '[' => ']', '{' => '}'];

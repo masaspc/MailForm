@@ -5,16 +5,22 @@ namespace App\Services\EasyMail;
 use App\Models\Theme;
 use App\Services\Admin\FormEditor;
 use App\Services\ThemeAssets;
+use App\Services\ThemeStructure;
 
 final class ImportedThemes
 {
     public function __construct(private ImportGuard $guard) {}
 
-    /** Merge each editable field and asset against what the previous backup supplied. */
+    /** Merge each editable field, structure slot and asset against the previous backup. */
     public function sync(string $name, string $version, array $scan, bool $dry, bool $verify, bool $overwrite, bool $needsAlias): array
     {
         $report = array_intersect_key($scan, array_flip(['layout', 'score', 'changes', 'behaviors', 'warnings', 'errors', 'fingerprint', 'stylesheets', 'background_logo']));
-        $report += ['source_name' => $name, 'version' => $version];
+        $structure = ThemeStructure::clean($scan['structure'] ?? []);
+        $report += [
+            'source_name' => $name, 'version' => $version, 'structure' => $structure,
+            'structure_sources' => array_intersect_key($scan['structure_sources'] ?? [], $structure),
+            'structure_fallbacks' => array_keys(array_diff_key(ThemeStructure::labels(), $structure)),
+        ];
         if ($report['errors'] || !$report['layout']) {
             return $report + ['status' => 'blocked', 'slug' => null, 'integrity' => $scan['integrity']];
         }
@@ -34,6 +40,17 @@ final class ImportedThemes
                     $preserved[] = $field;
                 }
                 $values[$field] = $value;
+            }
+            $structure = $report['structure'];
+            $overrides = $overwrite ? [] : $theme->editedStructureSlots();
+            $currentStructure = $theme->structure ?? [];
+            foreach (array_keys($overrides) as $slot) {
+                if (isset($currentStructure[$slot])) {
+                    $structure[$slot] = $currentStructure[$slot];
+                } else {
+                    unset($structure[$slot]);
+                }
+                $preserved[] = 'structure.'.$slot;
             }
             $assets = [];
             $baseline['assets'] = [];
@@ -78,12 +95,21 @@ final class ImportedThemes
             if (!JsonValue::same($theme->assets, $assets)) {
                 $theme->assets = $assets;
             }
+            if (!JsonValue::same($currentStructure, $structure)) {
+                $theme->structure = $structure;
+            }
+            if (!JsonValue::same($theme->structure_overrides ?? [], $overrides)) {
+                $theme->structure_overrides = $overrides;
+            }
             $changed = !$theme->exists || ($prior['fingerprint'] ?? null) !== $scan['fingerprint']
                 || !JsonValue::same($prior['warnings'] ?? [], $report['warnings'])
                 || !JsonValue::same($prior['behaviors'] ?? [], $report['behaviors'])
-                || $theme->isDirty(['header', 'footer', 'logo', 'layout', 'assets']);
+                || !JsonValue::same($prior['structure'] ?? [], $report['structure'])
+                || $theme->isDirty(['header', 'footer', 'logo', 'layout', 'assets', 'structure']);
             $reportChanged = !JsonValue::same($prior, $newReport);
-            if ($verify && ($changed || $reportChanged)) {
+            // Reports from before structure inference represented all slots using the standard layout.
+            $previousReport = $prior + ['structure' => [], 'structure_sources' => [], 'structure_fallbacks' => array_keys(ThemeStructure::labels())];
+            if ($verify && ($changed || !JsonValue::same($previousReport, $newReport))) {
                 $integrity[] = '移行元のテーマと保存済みの取込記録が一致しません。';
             }
             if (!$dry) {

@@ -43,7 +43,9 @@ final class StaticThemeMarkup
         $document = $this->document($reader->literalHtml($source), false);
         foreach ($document->getElementsByTagName('link') as $link) {
             if (in_array('stylesheet', preg_split('/\s+/', strtolower(trim($link->getAttribute('rel')))), true)) {
-                $css = $reader->localPath($link->getAttribute('href'));
+                // Legacy layouts often add a revision to a local stylesheet. Storage uses the file path.
+                $href = preg_replace('/\?[a-z0-9_.=&-]{1,128}\z/i', '', $link->getAttribute('href'));
+                $css = $reader->localPath($href);
                 if ($css !== null) {
                     $this->stylesheets[] = $css;
                 } else {

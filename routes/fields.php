@@ -17,6 +17,7 @@ Route::prefix('admin/themes')->middleware(['auth', AdminAccess::class.':admin'])
     Route::get('/', [ThemeController::class, 'index'])->name('admin.themes');
     Route::get('/{slug}/edit', [ThemeController::class, 'edit'])->name('admin.themes.edit');
     Route::post('/', [ThemeController::class, 'save'])->name('admin.themes.save');
+    Route::post('/{slug}/component', [ThemeController::class, 'component'])->name('admin.themes.component');
     Route::post('/{slug}/assets', [ThemeController::class, 'asset'])->name('admin.themes.asset');
     Route::post('/{slug}/approve', [ThemeController::class, 'approve'])->name('admin.themes.approve');
 });

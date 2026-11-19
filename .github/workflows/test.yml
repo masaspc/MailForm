@@ -141,7 +141,11 @@ jobs:
           if [[ -n ${EASYMAIL_SOURCE_ROOT:-} ]]; then
             bash tests/Fixtures/make-custom-theme.sh "$EASYMAIL_SOURCE_ROOT"
             db easymail_snapshot -e "UPDATE forms SET theme_name='garden_example'"
-            import --dry-run | jq -e '.themes.garden_example.layout == "gradation" and .forms[0].theme_review == "pending" and (.forms[0].published | not)'
+            import --dry-run | jq -e '.themes.garden_example as $theme | $theme.layout == "gradation"
+              and $theme.structure.row[-1].tag == "dl" and $theme.structure.field[-1].tag == "dd"
+              and $theme.structure.address_order == ["zip", "pref", "address", "building"]
+              and ($theme.structure_sources.confirm_button | startswith("form.blade.php:"))
+              and .forms[0].theme_review == "pending" and (.forms[0].published | not)'
             import | jq -e '.themes.garden_example.changes.added | index("js/ad_cookie.js") != null'
             import --verify-only | jq -e '.reconciliation.ok and (.forms[0].same_public_url | not)'
             php -r 'require "vendor/autoload.php"; $app = require "bootstrap/app.php"; $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap(); $theme = App\Models\Theme::whereSlug("garden_example")->sole(); exit($theme->logo === "images/logo_main.svg" && $theme->approveForPublication() === 1 ? 0 : 1);'

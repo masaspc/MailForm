@@ -11,6 +11,8 @@ use App\Services\PublicAccess;
 use App\Services\PublicFields;
 use App\Services\PublicMessage;
 use App\Services\PublicLocale;
+use App\Services\ThemeStructure;
+use App\View\PublicFormTheme;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -40,6 +42,12 @@ class PublicFormController extends Controller
         return Theme::where('slug', $definition['settings']['theme_name'] ?? 'one_column')->first();
     }
 
+    private function structure(Form $form): array
+    {
+        $structure = $form->getRelation('theme')?->structure;
+        return is_array($structure) ? ThemeStructure::clean($structure) : [];
+    }
+
     private function draft(Request $request, Form $form): array
     {
         $token = $request->input('receipt_token');
@@ -58,10 +66,12 @@ class PublicFormController extends Controller
     private function input(Form $form, array $draft, ?MessageBag $problems = null, bool $preview = false)
     {
         $definition = $form->definition;
-        $controls = $this->fields->controls($definition['fields'], $definition['source_version'] ?? null);
+        $structure = $this->structure($form);
+        $controls = $this->fields->controls($definition['fields'], $definition['source_version'] ?? null,
+            $preview ? $structure : ($draft['address_schema'] ?? []));
         return response()->view('public.input', [
             'form' => $form, 'draft' => $draft, 'controls' => collect($controls)->groupBy('field'),
-            'problems' => $problems ?? new MessageBag(), 'preview' => $preview, 'controlIds' => array_column($controls, 'id'),
+            'problems' => $problems ?? new MessageBag(), 'preview' => $preview, 'skin' => new PublicFormTheme($structure, $controls),
         ], $problems ? 422 : 200)->header('Cache-Control', 'no-store');
     }
 
@@ -75,7 +85,27 @@ class PublicFormController extends Controller
         $form->definition = $definition;
         $form->name = $definition['settings']['name'] ?? $form->name;
         PublicLocale::activate($definition['settings']['language'] ?? null);
-        return $this->input($form, ['values' => [], 'files' => []], preview: true);
+        $stage = $request->query('stage', 'input');
+        abort_unless(in_array($stage, ['input', 'confirm', 'thanks'], true), 404);
+        if ($stage === 'input') {
+            return $this->input($form, ['values' => [], 'files' => []], preview: true);
+        }
+
+        $structure = $this->structure($form);
+        $version = $definition['source_version'] ?? null;
+        $values = [];
+        foreach ($this->fields->controls($definition['fields'], $version, $structure) as $key => $control) {
+            $values[$key] = $control['source']['initial_value'] ?? '';
+        }
+        $answers = $this->fields->answers($definition['fields'], $values, [], $version, $structure);
+        $view = ['form' => $form, 'preview' => true, 'skin' => new PublicFormTheme($structure)];
+        if ($stage === 'confirm') {
+            return response()->view('public.confirm', $view + ['answers' => $answers])->header('Cache-Control', 'no-store');
+        }
+        $tags = $this->message->tags($definition['fields'], $answers, new Request(), $version, $values);
+        return response()->view('public.thanks', $view + [
+            'message' => strtr($definition['settings']['thanks_message'] ?? '', $tags),
+        ])->header('Cache-Control', 'no-store');
     }
 
     public function show(Request $request, string $slug = '')
@@ -85,6 +115,10 @@ class PublicFormController extends Controller
         $request->session()->put('public_drafts', array_slice($drafts, -19, null, true));
         $draft = ['token' => (string) Str::uuid(), 'form' => $form->id, 'revision' => $form->revision,
             'expires' => time() + min(config('session.lifetime') * 60, 86400), 'values' => [], 'files' => [], 'confirmed' => false];
+        // Only the optional building input changes the submitted data. Keep its shape until this receipt is sent.
+        if (ThemeStructure::hasBuilding($this->structure($form))) {
+            $draft['address_schema'] = ['address_order' => array_keys(ThemeStructure::ADDRESS_PARTS)];
+        }
         $this->persist($request, $draft);
         return $this->input($form, $draft);
     }
@@ -99,7 +133,8 @@ class PublicFormController extends Controller
 
         $definition = $form->definition;
         $sourceVersion = $definition['source_version'] ?? null;
-        $controls = $this->fields->controls($definition['fields'], $sourceVersion);
+        $structure = $this->structure($form);
+        $controls = $this->fields->controls($definition['fields'], $sourceVersion, $draft['address_schema'] ?? []);
         $disk = Storage::disk('local');
         $previousPaths = array_column($draft['files'], 'path');
         foreach (array_keys($draft['files']) as $key) {
@@ -146,8 +181,9 @@ class PublicFormController extends Controller
         if (!$valid) {
             return $this->input($form, $draft, $validator->errors());
         }
-        $answers = $this->fields->answers($definition['fields'], $values, $draft['files'], $sourceVersion);
-        return response()->view('public.confirm', compact('form', 'draft', 'answers'))->header('Cache-Control', 'no-store');
+        $answers = $this->fields->answers($definition['fields'], $values, $draft['files'], $sourceVersion, $draft['address_schema'] ?? []);
+        $skin = new PublicFormTheme($structure);
+        return response()->view('public.confirm', compact('form', 'draft', 'answers', 'skin'))->header('Cache-Control', 'no-store');
     }
 
     public function back(Request $request, string $slug = '')
@@ -173,7 +209,7 @@ class PublicFormController extends Controller
         app(\App\Services\SpamProtection::class)->verify($request, $form);
         $definition = $form->definition;
         $sourceVersion = $definition['source_version'] ?? null;
-        $answers = $this->fields->answers($definition['fields'], $draft['values'], $draft['files'], $sourceVersion);
+        $answers = $this->fields->answers($definition['fields'], $draft['values'], $draft['files'], $sourceVersion, $draft['address_schema'] ?? []);
         $tags = $this->message->tags($definition['fields'], $answers, $request, $sourceVersion, $draft['values']);
         $thanks = strtr($definition['settings']['thanks_message'] ?? '', $tags);
         $disk = Storage::disk('local');
@@ -223,6 +259,8 @@ class PublicFormController extends Controller
         $form = $this->published($request, $slug);
         $receipt = $request->session()->get('public_thanks.'.$form->id);
         abort_unless($receipt && $receipt['expires'] > time(), 404);
-        return response()->view('public.thanks', ['form' => $form, 'message' => $receipt['message']])->header('Cache-Control', 'no-store');
+        return response()->view('public.thanks', [
+            'form' => $form, 'message' => $receipt['message'], 'skin' => new PublicFormTheme($this->structure($form)),
+        ])->header('Cache-Control', 'no-store');
     }
 }

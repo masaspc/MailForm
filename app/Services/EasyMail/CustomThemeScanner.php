@@ -16,7 +16,6 @@ final class CustomThemeScanner
     private const MAX_ENTRIES = 1024;
     private const MAX_FILE = 8 * 1024 * 1024;
     private const MAX_TOTAL = 32 * 1024 * 1024;
-    private const MAX_TEMPLATE = 262144;
 
     private string $directory;
     private string $releaseHash;
@@ -60,7 +59,7 @@ final class CustomThemeScanner
         $result = [
             'layout' => null, 'score' => 0, 'changes' => ['changed' => [], 'added' => [], 'removed' => []],
             'behaviors' => [], 'warnings' => [], 'errors' => [], 'integrity' => [], 'header' => '', 'footer' => '', 'logo' => null,
-            'assets' => [], 'stylesheets' => [], 'fingerprint' => null,
+            'assets' => [], 'stylesheets' => [], 'fingerprint' => null, 'structure' => [], 'structure_sources' => [],
         ];
         if (strlen($name) > 255 || !preg_match('/\A[\pL\pM\pN_+ -][\pL\pM\pN._+ -]*\z/u', $name) || isset(FormEditor::THEMES[$name])) {
             $result['errors'][] = '独自テーマのディレクトリ名を安全に参照できません。';
@@ -105,7 +104,7 @@ final class CustomThemeScanner
             $this->convert($name, $files, $base, $result);
         } catch (RuntimeException $error) {
             $result['errors'][] = $error->getMessage();
-            $result['assets'] = $result['stylesheets'] = [];
+            $result['assets'] = $result['stylesheets'] = $result['structure'] = $result['structure_sources'] = [];
             $result['header'] = $result['footer'] = '';
             $result['logo'] = null;
         }
@@ -216,10 +215,22 @@ final class CustomThemeScanner
                 if ($reason !== null) {
                     $result['behaviors'][] = $path.' ('.$reason.' / '.['changed' => '変更', 'added' => '追加', 'removed' => '欠損'][$kind].')';
                     if ($kind !== 'removed') {
-                        $warnings[] = "{$path}:1 動作ファイル全体を除外しました。";
+                        $warnings[] = in_array($path, ['form.blade.php', 'index.blade.php', 'thanks.blade.php'], true)
+                            ? "{$path}:1 表示用のタグと識別子を静的に調べました。旧テンプレートの処理は MailForm の標準処理に置き換えます。"
+                            : "{$path}:1 動作ファイル全体を除外しました。";
                     }
                 }
             }
+        }
+        $templates = [];
+        foreach (['layout', 'index', 'form', 'thanks'] as $part) {
+            $path = $part.'.blade.php';
+            if (isset($files[$path])) {
+                $templates[$path] = $files[$path]['bytes'];
+            }
+        }
+        foreach ((new ThemeStructureReader)->read($templates, $warnings) as $key => $value) {
+            $result[$key] = $value;
         }
         $markup = new StaticThemeMarkup($name, $images);
         $changed = array_flip([...$result['changes']['added'], ...$result['changes']['changed']]);
@@ -237,7 +248,7 @@ final class CustomThemeScanner
             if (isset($changed[$layout], $base[$layout])) {
                 // The stock sibling may itself be customized. Trust it only after verifying this release's digest.
                 try {
-                    $official = $this->read($this->directory.'/'.$result['layout'].'/'.$layout, $layout, self::MAX_TEMPLATE);
+                    $official = $this->read($this->directory.'/'.$result['layout'].'/'.$layout, $layout, ThemeTemplateReader::MAX_BYTES);
                     if (hash('sha256', $official) === $base[$layout]) {
                         $reference = $official;
                     }
@@ -267,8 +278,20 @@ final class CustomThemeScanner
                 }
             }
         }
+        // A custom component tree can rely on a stock grid that the default MailForm layout never loads.
+        // Each processed stylesheet still shares one content-addressed blob across all themes.
+        if (!empty($result['structure'])) {
+            foreach ($markup->stylesheets as $path) {
+                if (str_starts_with($path, 'css/') && str_ends_with(strtolower($path), '.css')
+                    && isset($files[$path], $base[$path]) && $files[$path]['hash'] === $base[$path]) {
+                    $styles[$path] = $files[$path]['bytes'];
+                }
+            }
+        }
         $order = array_unique([...$markup->stylesheets, ...array_keys($styles)]);
-        $cssReport = new StylesheetReport(linkedLogo: SafeMarkup::hasLinkedLogo($result['header']));
+        $cssReport = new StylesheetReport(linkedLogo: SafeMarkup::hasLinkedLogo($result['header']),
+            actionAttributes: $result['button_style_hooks'] ?? []);
+        unset($result['button_style_hooks']);
         foreach ($order as $path) {
             if (isset($styles[$path])) {
                 $asset = ThemeAssets::prepare($path, $styles[$path], $images, $warnings, $cssReport);
@@ -291,10 +314,7 @@ final class CustomThemeScanner
 
     private function template(array $file): string
     {
-        if (strlen($file['bytes']) > self::MAX_TEMPLATE || !mb_check_encoding($file['bytes'], 'UTF-8') || str_contains($file['bytes'], "\0")) {
-            throw new RuntimeException($file['path'].': 256 KiB 以下の UTF-8 テキストとして読み取れません。');
-        }
-        return $file['bytes'];
+        return ThemeTemplateReader::checkedSource($file['path'], $file['bytes']);
     }
 
     private function behaviorType(string $path, bool $removed): ?string

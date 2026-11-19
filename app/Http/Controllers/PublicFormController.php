@@ -9,6 +9,7 @@ use App\Services\PublicAccess;
 use App\Services\PublicFields;
 use App\Services\PublicMessage;
 use App\Services\PublicLocale;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -188,7 +189,7 @@ class PublicFormController extends Controller
 
     private function redirectThanks(Form $form)
     {
-        return redirect()->route($form->slug === '' ? 'public.root.thanks' : 'public.thanks', $form->slug === '' ? [] : ['slug' => $form->slug], 303);
+        return new RedirectResponse($form->publicPath('thanks'), 303);
     }
 
     public function thanks(Request $request, string $slug = '')

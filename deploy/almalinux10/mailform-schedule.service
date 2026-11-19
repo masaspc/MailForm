@@ -1,0 +1,15 @@
+[Unit]
+Description=MailForm scheduled delivery, retention and heartbeat
+After=mariadb.service network-online.target
+
+[Service]
+Type=oneshot
+User=mailform
+Group=mailform
+ExecStart=/usr/bin/php /srv/mailform/current/artisan schedule:run
+UMask=0077
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/srv/mailform/shared/storage
+NoNewPrivileges=true

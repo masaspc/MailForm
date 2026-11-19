@@ -14,7 +14,9 @@ use Throwable;
 
 class CheckInstallation extends Command
 {
-    protected $signature = 'mailform:check {--smtp : メールを送らずにSMTPサーバーに接続する}';
+    protected $signature = 'mailform:check
+        {--smtp : メールを送らずにSMTPサーバーに接続する}
+        {--expect-paused : 配信停止の移行先を検査し、配信が有効なら失敗する}';
     protected $description = 'DB、非公開ストレージ、暗号化、定期実行の設定を確認する';
 
     public function handle(): int
@@ -48,6 +50,11 @@ class CheckInstallation extends Command
             }
             $this->line(($ok ? 'OK  ' : 'NG  ').$name);
             $success = $success && $ok;
+        }
+        $this->line('メール配信　'.(config('mailform.delivery_enabled') ? '有効' : '停止中'));
+        if ($this->option('expect-paused') && config('mailform.delivery_enabled')) {
+            $this->error('移行先の配信が有効です。MAILFORM_DELIVERY_ENABLED=false を設定し、設定キャッシュを更新してください。');
+            $success = false;
         }
         try {
             $last = Cache::get('mailform.scheduler');

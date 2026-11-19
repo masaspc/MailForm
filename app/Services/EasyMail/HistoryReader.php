@@ -2,11 +2,50 @@
 
 namespace App\Services\EasyMail;
 
+use App\Models\Attachment;
+use App\Models\Submission;
 use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 
 class HistoryReader
 {
+    public const COLUMNS = ['id','created_at','updated_at','form_id','form_name','admin_email','user_email','mail_title','content','theme_name','bcc_email','cc_email','conf_mail_flag','include_submissions','include_submissions_admin_email','url','template','attach_files'];
+
+    public function matches(Submission $receipt, array $row, array $fields, array $answers): bool
+    {
+        $snapshot = $receipt->snapshot;
+        $stored = $snapshot['legacy_history'] ?? null;
+        $storedFields = $snapshot['definition']['fields'] ?? null;
+        if (!is_array($stored) || !is_array($storedFields) || !array_is_list($storedFields)
+            || count($storedFields) !== count($fields) || ($snapshot['name'] ?? null) !== $row['form_name']) {
+            return false;
+        }
+        $row = array_intersect_key($row, array_flip(self::COLUMNS));
+        ksort($row);
+        ksort($stored);
+        if ($stored !== $row) {
+            return false;
+        }
+        // A later form edit may rename a current field. Check the values under the keys saved at import.
+        $expected = [];
+        foreach ($fields as $i => $field) {
+            $actual = $storedFields[$i];
+            $key = $actual['name'] ?? null;
+            if (!is_string($key) || array_key_exists($key, $expected) || ($actual['title'] ?? null) !== $field['title']
+                || ($actual['form_type'] ?? null) !== $field['form_type']) {
+                return false;
+            }
+            $expected[$key] = $answers[$field['name']];
+        }
+        $saved = $receipt->answers;
+        if (!is_array($saved)) {
+            return false;
+        }
+        ksort($saved);
+        ksort($expected);
+        return $expected === $saved;
+    }
+
     public function answers(array $history, array $currentFields, array &$warnings): array
     {
         $raw = (string) $history['content'];
@@ -42,8 +81,8 @@ class HistoryReader
         return [$fields, $answers];
     }
 
-    /** 2.01.004 writes hashes back-to-back, while its history screen splits on commas. */
-    public function files(array $history, ?string $directory, array &$warnings): array
+    /** Keep missing but valid references so an incomplete snapshot cannot unlink an earlier copy. */
+    public function files(array $history, ?string $directory, array &$warnings, int &$unsafe = 0): array
     {
         $files = [];
         foreach (explode(',', (string) $history['attach_files']) as $fragment) {
@@ -51,18 +90,21 @@ class HistoryReader
                 continue;
             }
             if (str_contains($fragment, '/') || str_contains($fragment, '\\') || preg_match('/[[:cntrl:]]/', $fragment)) {
+                $unsafe++;
                 $warnings[] = "履歴 #{$history['id']}: 安全なファイル名ではない添付参照を除外しました。";
                 continue;
             }
             $parts = preg_split('/(?=[A-Za-z0-9]{40}\.)/', $fragment, flags: PREG_SPLIT_NO_EMPTY);
             foreach ($parts as $name) {
                 if (strlen($name) > 255 || preg_match('~[\\\\/\x00-\x1f\x7f]~', $name) || $name === '.' || $name === '..') {
+                    $unsafe++;
                     $warnings[] = "履歴 #{$history['id']}: 安全なファイル名ではない添付参照を除外しました。";
                     continue;
                 }
                 $path = $directory === null ? false : realpath($directory.'/'.$name);
                 if (!$path || $path !== $directory.'/'.$name || !is_file($path) || !is_readable($path)) {
                     $warnings[] = "履歴 #{$history['id']}: 添付を確認できません: {$name}";
+                    $files[$name] = null;
                     continue;
                 }
                 $files[$name] = $path;
@@ -71,12 +113,16 @@ class HistoryReader
         return $files;
     }
 
+    public function attachmentKey(array $fields, int $referenceCount): string
+    {
+        $fileFields = array_values(array_filter($fields, fn ($f) => ($f['form_type'] ?? null) === 'file'));
+        $name = $fileFields[0]['name'] ?? null;
+        return $referenceCount === 1 && count($fileFields) === 1 && is_string($name) && $name !== '' ? $name : 'legacy_attachment';
+    }
+
     public function copy(string $source, string $name, int $historyId): array
     {
-        $digest = hash_file('sha256', $source);
-        if ($digest === false) {
-            throw new RuntimeException("履歴 #{$historyId} の添付を読み込めません。");
-        }
+        $digest = $this->digest($source, $historyId);
         $disk = Storage::disk('local');
         $path = "easymail/{$historyId}/{$digest}";
         if (!$disk->exists($path) || hash_file('sha256', $disk->path($path)) !== $digest) {
@@ -100,5 +146,24 @@ class HistoryReader
             'mime' => (new \finfo(FILEINFO_MIME_TYPE))->file($source) ?: 'application/octet-stream',
             'size' => filesize($source),
         ];
+    }
+
+    public function digest(string $source, int $historyId): string
+    {
+        return hash_file('sha256', $source) ?: throw new RuntimeException("履歴 #{$historyId} の添付を読み込めません。");
+    }
+
+    /** Only importer-owned digest paths can be retired, after the new DB references have committed. */
+    public function unusedCopies(int $historyId, array $linkedPaths): array
+    {
+        $directory = "easymail/{$historyId}";
+        $unused = [];
+        foreach (Storage::disk('local')->files($directory) as $path) {
+            if (preg_match('/^[a-f0-9]{64}(?:\.[a-f0-9]{24}\.tmp)?$/D', basename($path))
+                && !in_array($path, $linkedPaths, true) && !Attachment::where('path', $path)->exists()) {
+                $unused[] = $path;
+            }
+        }
+        return $unused;
     }
 }

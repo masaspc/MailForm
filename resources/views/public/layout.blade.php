@@ -8,9 +8,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>@yield('step') | {{ $form->name }}</title>
-<link rel="stylesheet" href="{{ asset('assets/form.css') }}">
-<link rel="stylesheet" href="{{ asset('assets/themes/stock.css') }}">
-<script defer src="{{ asset('assets/form.js') }}"></script>
+<link rel="stylesheet" href="{{ \App\Services\PublicFormUrl::asset('form.css') }}">
+<link rel="stylesheet" href="{{ \App\Services\PublicFormUrl::asset('themes/stock.css') }}">
+<script defer src="{{ \App\Services\PublicFormUrl::asset('form.js') }}"></script>
 </head>
 <body class="theme-{{ $theme?->layout ?? $themeName }}">
 <div class="site-banner">{{ \App\Services\SafeMarkup::render($theme?->header ?: config('app.name', 'MailForm')) }}</div>

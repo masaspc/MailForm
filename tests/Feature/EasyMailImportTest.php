@@ -7,6 +7,8 @@ use App\Models\Delivery;
 use App\Models\Form;
 use App\Models\FormRevision;
 use App\Models\Submission;
+use App\Services\EasyMail\ImportGuard;
+use App\Services\ReceiptPurge;
 use Illuminate\Database\Connection;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
@@ -191,11 +193,13 @@ class EasyMailImportTest extends TestCase
         $this->legacy->table('forms')->where('id', 6)->delete();
         $this->runImport(['--form' => 5]);
         $this->assertTrue(Form::where('legacy_id', 6)->sole()->published);
+        $this->assertSame('still_published', $this->verify(2, ['--form' => 6])['forms'][0]['form_state']);
         $report = $this->runImport(['--dry-run' => true]);
         $this->assertEquals([6], $report['removed_forms']);
         $this->assertTrue(Form::where('legacy_id', 6)->sole()->published);
         $this->runImport();
         $this->assertFalse(Form::where('legacy_id', 6)->sole()->published);
+        $this->assertSame('withdrawn', $this->verify(0, ['--form' => 6])['forms'][0]['form_state']);
     }
 
     public function test_archived_form_and_erased_history_remain_withdrawn_on_reimport(): void
@@ -231,6 +235,212 @@ class EasyMailImportTest extends TestCase
         $this->legacy->table('migrations')->insert(['migration' => '2022_12_14_071441_create_forms_table']);
         $this->assertSame(1, Artisan::call('easymail:import', ['--source-root' => $this->dir, '--dry-run' => true]));
         $this->assertDatabaseCount('forms', 0);
+    }
+
+    public function test_final_snapshot_accounts_for_arrivals_edits_removals_tombstones_and_native_receipts(): void
+    {
+        $rows = $this->legacy->table('histories');
+        $original = (array) $rows->first();
+        $rows->update(['mail_title' => '001']);
+        $rows->insert([[...$original, 'id' => 81], [...$original, 'id' => 82]]);
+        $before = $this->verify(2)['forms'][0];
+        $this->assertSame('missing', $before['form_state']);
+        $this->assertSame(3, $before['source']['missing']);
+        $this->assertDatabaseCount('forms', 0);
+
+        $this->runImport();
+        $this->assertTrue($this->verify()['ok']);
+        $form = Form::sole();
+        $token = Submission::where('legacy_id', 80)->sole()->token;
+        $form->submissions()->create(['token' => 'staging-receipt', 'answers' => ['test' => 'local'], 'snapshot' => []]);
+        $localForm = Form::create(['slug' => 'new-local', 'name' => '新規', 'published' => false, 'definition' => []]);
+        $localForm->submissions()->create(['token' => 'new-form-receipt', 'answers' => [], 'snapshot' => []]);
+        $tombstone = Submission::where('legacy_id', 82)->sole();
+        $tombstone->update(['retain' => false, 'answers' => [], 'snapshot' => ['retain' => false]]);
+        $this->assertSame(1, $this->verify(2)['forms'][0]['source']['pending_purge']);
+        app(ReceiptPurge::class)->purge($tombstone->id);
+
+        // A late arrival and an edit without an updated_at change both belong to the final snapshot.
+        $this->legacy->table('histories')->where('id', 80)->update(['mail_title' => '1']);
+        $this->legacy->table('histories')->where('id', 81)->delete();
+        $this->legacy->table('histories')->insert([...$original, 'id' => 83]);
+        $this->legacy->statement('PRAGMA query_only = ON');
+        $checks = $this->verify(2)['forms'];
+        $this->assertSame(['histories' => 3, 'matched' => 0, 'changed' => 1, 'missing' => 1, 'pending_purge' => 0, 'purged' => 1], $checks[0]['source']);
+        $this->assertSame(83, $checks[0]['last_source_id']);
+        $this->assertSame([81], $checks[0]['examples']['absent_from_source']);
+        $this->assertSame(1, $checks[0]['new_only']['retained']);
+        $this->assertSame('new_only', $checks[1]['form_state']);
+        $this->assertSame(1, $checks[1]['new_only']['retained']);
+        $this->assertSame('001', Submission::where('legacy_id', 80)->sole()->snapshot['legacy_history']['mail_title']);
+        $this->assertDatabaseMissing('submissions', ['legacy_id' => 83]);
+
+        $this->runImport();
+        $checks = $this->verify(2)['forms'][0];
+        $this->assertSame(2, $checks['source']['matched']);
+        $this->assertSame(['absent_from_source' => 1], $checks['differences']);
+        $this->assertSame(['absent_from_source' => [81]], $checks['examples']);
+        $retained = Submission::where('legacy_id', 81)->sole();
+        $this->assertSame($original['content'], $retained->snapshot['legacy_history']['content']);
+        $retained->update(['retain' => false, 'answers' => [], 'snapshot' => ['retain' => false]]);
+        app(ReceiptPurge::class)->purge($retained->id);
+        $verified = $this->verify();
+        $this->assertTrue($verified['ok']);
+        $this->assertSame(1, $verified['forms'][0]['absent_from_source']['purged']);
+        $this->assertCount(1, $this->verify(0, ['--form' => 5])['forms']);
+        $this->runImport();
+        $this->assertSame($verified, $this->verify());
+        $this->assertSame($token, Submission::where('legacy_id', 80)->sole()->token);
+        $this->assertSame('1', Submission::where('legacy_id', 80)->sole()->snapshot['legacy_history']['mail_title']);
+        $this->assertSame(['test' => 'local'], Submission::where('token', 'staging-receipt')->sole()->answers);
+        $this->assertSame([], $tombstone->fresh()->answers);
+        $this->assertDatabaseCount('submissions', 6);
+        $this->assertDatabaseCount('deliveries', 0);
+        Mail::assertNothingSent();
+    }
+
+    public function test_verification_hashes_both_file_copies_and_retry_retires_only_obsolete_files(): void
+    {
+        $rows = $this->legacy->table('histories');
+        $rows->update(['attach_files' => 'a.txt,A.txt,kept.txt,obsolete.txt']);
+        foreach (['a.txt' => 'old', 'A.txt' => 'old', 'kept.txt' => 'keep', 'obsolete.txt' => 'drop'] as $name => $bytes) {
+            file_put_contents($this->dir.'/'.$name, $bytes);
+        }
+        // Separate case-variant names can share bytes on case-insensitive filesystems and DB collations.
+        $this->runImport();
+        $this->assertSame(4, Attachment::count());
+        $this->assertSame(4, $this->verify()['forms'][0]['files']['verified']);
+        $disk = Storage::disk('local');
+        $old = 'easymail/80/'.hash('sha256', 'old');
+        $obsolete = 'easymail/80/'.hash('sha256', 'drop');
+        $kept = 'easymail/80/'.hash('sha256', 'keep');
+        $rows->update(['attach_files' => 'a.txt,kept.txt']);
+        file_put_contents($this->dir.'/a.txt', 'new');
+        unlink($this->dir.'/kept.txt');
+        $pre = $this->verify(2)['forms'][0];
+        $this->assertSame(1, $pre['files']['changed']);
+        $this->assertSame(1, $pre['files']['source_unavailable']);
+        $this->assertSame(2, $pre['files']['extra_links']);
+        $disk->assertExists([$old, $obsolete, $kept]);
+
+        $this->runImport();
+        $this->assertSame(2, Attachment::count());
+        $disk->assertMissing([$old, $obsolete]);
+        $disk->assertExists($kept);
+        $partial = $this->verify(2)['forms'][0]['files'];
+        $this->assertSame(1, $partial['source_unavailable']);
+        $this->assertSame(0, $partial['extra_links']);
+        $this->assertSame(1, $partial['verified']);
+
+        file_put_contents($this->dir.'/kept.txt', 'keep');
+        $disk->put($kept, 'xxxx');
+        $abandoned = 'easymail/80/'.hash('sha256', 'abandoned');
+        $disk->put($abandoned, 'abandoned');
+        $bad = $this->verify(2)['forms'][0]['files'];
+        $this->assertSame(1, $bad['changed']);
+        $this->assertSame(1, $bad['unlinked_copies']);
+        $disk->assertExists($abandoned);
+        $this->assertSame('xxxx', $disk->get($kept));
+        $this->runImport();
+        $this->assertSame(2, $this->verify()['forms'][0]['files']['verified']);
+        $disk->assertMissing($abandoned);
+        $disk->delete($kept);
+        $this->assertSame(1, $this->verify(2)['forms'][0]['files']['target_missing']);
+        $this->runImport();
+        $this->assertSame('keep', $disk->get($kept));
+        $this->assertTrue($this->verify()['ok']);
+    }
+
+    public function test_verify_compares_form_values_and_saved_answers_even_when_all_ids_and_timestamps_match(): void
+    {
+        $this->legacy->table('forms')->update(['mail_title' => '001']);
+        $this->runImport();
+        $this->legacy->table('forms')->update(['mail_title' => '1']);
+        $receipt = Submission::sole();
+        $receipt->timestamps = false;
+        $receipt->update(['answers' => ['email' => 'changed']]);
+        $pre = $this->verify(2)['forms'][0];
+        $this->assertSame('changed', $pre['form_state']);
+        $this->assertSame(1, $pre['source']['changed']);
+        $this->runImport();
+        $this->assertSame('visitor@example.org', $receipt->fresh()->answers['email']);
+        $this->assertSame(2, Form::sole()->revision);
+        $this->assertTrue($this->verify()['ok']);
+
+        $this->legacy->table('form_blocks')->where('id', 8)->update(['name' => 'renamed_email']);
+        $this->runImport();
+        $this->assertSame('visitor@example.org', $receipt->fresh()->answers['email']);
+        $this->assertTrue($this->verify()['ok']);
+    }
+
+    public function test_an_unassignable_history_fails_full_handoff_before_any_import(): void
+    {
+        $this->legacy->table('histories')->update(['form_id' => null]);
+        foreach ([[], ['--verify-only' => true]] as $mode) {
+            $this->assertSame(1, Artisan::call('easymail:import', ['--source-version' => '2.01.004', ...$mode]));
+            $this->assertStringContainsString('旧履歴 #80 のフォームID', Artisan::output());
+        }
+        $this->assertDatabaseCount('forms', 0);
+    }
+
+    public function test_a_moved_receipt_preserves_its_identity_and_an_erased_receipt_moves_only_its_mapping(): void
+    {
+        $source = (array) $this->legacy->table('histories')->first();
+        $this->legacy->table('histories')->insert([...$source, 'id' => 81]);
+        $this->runImport();
+        $erased = Submission::where('legacy_id', 80)->sole();
+        $erased->update(['retain' => false, 'answers' => [], 'snapshot' => ['retain' => false]]);
+        app(ReceiptPurge::class)->purge($erased->id);
+        $active = Submission::where('legacy_id', 81)->sole();
+        $this->legacy->table('histories')->update(['form_id' => 42]);
+        $before = $this->verify(2)['forms'];
+        $this->assertSame([80], $before[1]['examples']['wrong_form']);
+        $this->assertSame([81], $before[1]['examples']['changed']);
+        $this->runImport();
+        $target = Form::where('legacy_id', 42)->sole();
+        $this->assertSame($target->id, $erased->fresh()->form_id);
+        $this->assertSame($target->id, $active->fresh()->form_id);
+        $this->assertSame($active->token, $active->fresh()->token);
+        $this->assertSame([], $erased->fresh()->answers);
+        $this->assertSame(['retain' => false], $erased->fresh()->snapshot);
+        $this->assertTrue($this->verify()['ok']);
+    }
+
+    public function test_same_sqlite_file_under_an_alias_is_rejected_and_overlapping_commands_fail_until_release(): void
+    {
+        $path = $this->dir.'/test.sqlite';
+        touch($path);
+        symlink($path, $this->dir.'/alias.sqlite');
+        $default = DB::getDefaultConnection();
+        $targetConfig = ['driver' => 'sqlite', 'database' => $path, 'prefix' => '', 'username' => 'writer'];
+        config(['database.connections.handoff_target' => $targetConfig]);
+        DB::setDefaultConnection('handoff_target');
+        try {
+            $target = DB::connection();
+            $guard = app(ImportGuard::class);
+            $guard->run($this->legacy, $target, function () {
+                $this->assertSame(1, Artisan::call('easymail:import', ['--verify-only' => true, '--source-version' => '2.01.004']));
+                $this->assertStringContainsString('実行中', Artisan::output());
+            });
+            $this->assertTrue($guard->run($this->legacy, $target, fn () => true));
+            DB::purge('legacy');
+            config(['database.connections.legacy' => [...$targetConfig, 'database' => $this->dir.'/alias.sqlite', 'username' => 'reader']]);
+            foreach ([[], ['--dry-run' => true], ['--verify-only' => true]] as $mode) {
+                $this->assertSame(1, Artisan::call('easymail:import', ['--source-version' => '2.01.004', ...$mode]));
+                $this->assertStringContainsString('同一のDB', Artisan::output());
+            }
+        } finally {
+            DB::setDefaultConnection($default);
+            DB::purge('handoff_target');
+        }
+    }
+
+    private function verify(int $expected = 0, array $options = []): array
+    {
+        $code = Artisan::call('easymail:import', ['--verify-only' => true, '--json' => true, '--source-version' => '2.01.004', '--attachments' => $this->dir, ...$options]);
+        $output = Artisan::output();
+        $this->assertSame($expected, $code, $output);
+        return json_decode($output, true, flags: JSON_THROW_ON_ERROR)['reconciliation'];
     }
 
     private function runImport(array $options = []): array

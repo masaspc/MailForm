@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\PublicFormUrl;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
@@ -17,6 +18,11 @@ class Form extends Model
             'definition' => 'array',
             'draft_definition' => 'array',
         ];
+    }
+
+    public function publicPath(string $action = ''): string
+    {
+        return PublicFormUrl::form($this->slug, $action);
     }
 
     public function submissions(): HasMany

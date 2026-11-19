@@ -12,8 +12,17 @@ use Throwable;
 
 class Outbox
 {
+    public function enabled(): bool
+    {
+        return config('mailform.delivery_enabled');
+    }
+
     public function send(int $id): string
     {
+        if (!$this->enabled()) {
+            return 'paused';
+        }
+
         // Claim before contacting SMTP. A concurrent runner can only claim pending rows.
         $claimed = Delivery::whereKey($id)->where('status', 'pending')->update([
             'status' => 'sending', 'attempts' => DB::raw('attempts + 1'), 'last_error' => null,

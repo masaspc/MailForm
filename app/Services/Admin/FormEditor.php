@@ -5,6 +5,7 @@ namespace App\Services\Admin;
 use App\Models\Form;
 use App\Services\EasyMail\FormAudit;
 use App\Services\FieldLibrary;
+use App\Services\PublicFormUrl;
 use App\Services\SpamProtection;
 use App\Services\ThemeCatalog;
 use Illuminate\Http\Request;
@@ -99,7 +100,7 @@ class FormEditor
     {
         $rules = [
             'name' => 'required|string|max:190',
-            'slug' => 'nullable|string|max:190',
+            'slug' => 'nullable|string|max:255',
             'language' => ['nullable', Rule::in(['ja','en','cn'])],
             'theme_name' => ['required', Rule::in(array_unique([...array_keys(ThemeCatalog::choices()), $base['settings']['theme_name'] ?? 'gray']))],
             'admin_email' => 'nullable|string|max:2000', 'cc_email' => 'nullable|string|max:2000', 'bcc_email' => 'nullable|string|max:2000',
@@ -234,11 +235,10 @@ class FormEditor
 
     public function checkSlug(string $slug, ?Form $form): void
     {
-        if ($slug !== '' && (! preg_match('/^[\pL\pN_-]+$/uD', $slug)
-            || in_array(strtolower($slug), ['admin', 'login', 'logout', 'up', 'storage', 'assets', 'send', 'thanks', 'confirm', 'back'], true))) {
-            throw ValidationException::withMessages(['slug' => 'URLには英数字・日本語・ハイフン・アンダースコアを指定してください。管理画面などの予約語は使用できません。']);
+        if (($problem = PublicFormUrl::problem($slug)) !== null) {
+            throw ValidationException::withMessages(['slug' => $problem]);
         }
-        if (Form::where('slug', $slug)->when($form, fn ($q) => $q->whereKeyNot($form->id))->exists()) {
+        if (Form::whereRaw('LOWER(slug) = LOWER(?)', [$slug])->when($form, fn ($q) => $q->whereKeyNot($form->id))->exists()) {
             throw ValidationException::withMessages(['slug' => 'このURLは別のフォームで使用されています。']);
         }
     }

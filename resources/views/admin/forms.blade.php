@@ -26,7 +26,7 @@
         <a class="btn compact" href="{{ route('admin.edit', $form) }}">フォーム編集</a>
         <a class="btn compact" href="{{ route('admin.edit', $form) }}#fields">項目編集</a>
         <form method="post" action="{{ route('admin.copy',$form) }}">@csrf<button class="btn compact">複製</button></form>
-        @endif @if($form->published)<a class="text-link" href="{{ url($form->slug) }}">公開画面 ↗</a>@endif
+        @endif @if($form->published)<a class="text-link" href="{{ $form->publicPath() }}">公開画面 ↗</a>@endif
     </div></td>
 </tr>
 @empty

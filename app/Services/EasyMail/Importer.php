@@ -4,10 +4,12 @@ namespace App\Services\EasyMail;
 
 use App\Models\FieldTemplate;
 use App\Models\Form;
-use Illuminate\Support\Collection;
 use App\Models\Submission;
+use App\Services\PublicFormUrl;
 use Illuminate\Database\Connection;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use RuntimeException;
 
@@ -20,14 +22,21 @@ class Importer
     private string $version;
     private array $sharedIssues;
     private bool $hasSourceFiles;
+    private ?Reconciliation $verification;
 
-    public function __construct(private FormAudit $audit, private HistoryReader $reader) {}
+    public function __construct(private FormAudit $audit, private HistoryReader $reader, private ImportGuard $guard) {}
 
-    public function run(SourceRelease $release, ?string $attachments, ?int $formId, bool $dryRun): array
+    public function run(SourceRelease $release, ?string $attachments, ?int $formId, bool $dryRun, bool $verifyOnly = false): array
+    {
+        $this->source = DB::connection('legacy');
+        $this->dryRun = $dryRun || $verifyOnly;
+        $this->verification = $verifyOnly ? new Reconciliation($this->source, $this->reader, $attachments) : null;
+        return $this->guard->run($this->source, DB::connection(), fn () => $this->process($release, $attachments, $formId));
+    }
+
+    private function process(SourceRelease $release, ?string $attachments, ?int $formId): array
     {
         $root = $release->root;
-        $this->source = DB::connection('legacy');
-        $this->dryRun = $dryRun;
         $this->version = $release->version;
         $this->attachmentDirectory = $attachments;
         $this->installation = new InstallationAudit($root, $release->version);
@@ -65,7 +74,7 @@ class Importer
                 $this->sharedIssues[] = '有効なプラグインの適用範囲・移植を確認してください: '.($plugin['name'] ?: $plugin['uid']);
             }
         }
-        $report = ['version' => $release->version, 'dry_run' => $dryRun, 'plugins' => $plugins, 'extra_tables' => array_values(array_diff($tables, $stockTables)), 'warnings' => [], 'forms' => []];
+        $report = ['version' => $release->version, 'dry_run' => $this->dryRun, 'verify_only' => $this->verification !== null, 'plugins' => $plugins, 'extra_tables' => array_values(array_diff($tables, $stockTables)), 'warnings' => [], 'forms' => []];
         if ($root === null) {
             $report['warnings'][] = '--source-root 未指定のため標準テーマ・本体ファイルの変更は未照合です。';
         }
@@ -74,6 +83,12 @@ class Importer
         }
 
         $forms = $this->source->table('forms')->when($formId !== null, fn ($q) => $q->where('id', $formId))->lazyById(100);
+        $histories = $this->source->table('histories')->when($formId !== null, fn ($q) => $q->where('form_id', $formId));
+        $unassigned = (clone $histories)->where(fn ($q) => $q->whereNull('form_id')->orWhere('form_id', '<=', 0))->orderBy('id')->value('id');
+        if ($unassigned !== null) {
+            throw new RuntimeException("旧履歴 #{$unassigned} のフォームIDを特定できません。移行元の複製を確認してください。");
+        }
+        $report['source_history_count'] = $histories->count();
         foreach ($forms as $row) {
             $report['forms'][] = $this->form((array) $row);
         }
@@ -83,7 +98,10 @@ class Importer
         foreach ($orphans as $id) {
             $report['forms'][] = $this->form(['id' => $id, 'name' => "旧フォーム #{$id}", 'url' => null, 'view_flag' => 0], true);
         }
-        if ($formId !== null && !$report['forms']) {
+        if (array_sum(array_column($report['forms'], 'history_count')) !== $report['source_history_count']) {
+            throw new RuntimeException('フォーム別の旧履歴件数が複製全体の対象件数と一致しません。複製を固定し、履歴のフォームIDを確認して再実行してください。');
+        }
+        if ($formId !== null && !$report['forms'] && !($this->verification && Form::where('legacy_id', $formId)->exists())) {
             throw new RuntimeException("旧フォーム #{$formId} が見つかりません。");
         }
         $report['removed_forms'] = $formId === null ? $this->withdrawRemovedForms(array_column($report['forms'], 'legacy_id')) : [];
@@ -92,6 +110,9 @@ class Importer
         }
         $report['library'] = $this->importLibrary($formId, $report['warnings']);
         $report['warnings'] = array_values(array_unique($report['warnings']));
+        if ($this->verification) {
+            $report['reconciliation'] = $this->verification->finish($formId);
+        }
         return $report;
     }
 
@@ -132,14 +153,20 @@ class Importer
             $validationIssues = $this->audit->inspect($row, $fields, $warnings);
         }
 
-        $reserved = ['admin','login','logout','up','storage','assets','send','thanks','confirm','back'];
-        $urlConflict = $this->source->table('forms')->where('id', '!=', $id)
-            ->whereRaw("LOWER(COALESCE(url, '')) = LOWER(?)", [$slug])->exists() || $this->occupied($slug, $id);
-        if ($orphan || $urlConflict || mb_strlen($slug) > 190 || !preg_match('/^[\pL\pN_-]*$/uD', $slug) || in_array(strtolower($slug), $reserved, true)) {
+        $urlProblem = PublicFormUrl::problem($slug);
+        $urlConflict = $this->sourceUses($slug, $id) || $this->occupied($slug, $id);
+        if ($orphan || $urlConflict || $urlProblem !== null) {
+            if ($urlProblem !== null) {
+                $issues[] = $urlProblem;
+            }
+            if ($urlConflict) {
+                $issues[] = '同じ公開パスを使用するフォームがあります。';
+            }
             $issues[] = '元のURLを使用できないため履歴用の仮URLを割り当てます。';
             $slug = 'legacy-draft-'.$id;
-            while ($this->occupied($slug, $id) || $this->source->table('forms')->where('url', $slug)->exists()) {
-                $slug .= '-x';
+            $suffix = 1;
+            while ($this->occupied($slug, $id) || $this->sourceUses($slug)) {
+                $slug = 'legacy-draft-'.$id.'-'.$suffix++;
             }
         }
         $settings = array_intersect_key($row, array_flip(FormAudit::SETTINGS));
@@ -156,11 +183,13 @@ class Importer
         $name = (string) ($row['name'] ?: "旧フォーム #{$id}");
         $attributes = ['slug' => $slug, 'name' => mb_substr($name, 0, 255), 'published' => (int) $row['view_flag'] === 1 && !$issues, 'definition' => $definition];
 
-        $form = $this->dryRun ? null : DB::transaction(function () use ($id, $attributes, $definition) {
+        $form = $this->dryRun ? Form::where('legacy_id', $id)->first() : DB::transaction(function () use ($id, $attributes, $definition) {
             $form = Form::where('legacy_id', $id)->lockForUpdate()->first() ?? new Form(['legacy_id' => $id]);
-            $changed = !$form->exists || $form->definition != $definition;
+            $changed = !$form->exists || !$this->sameJson($form->definition, $definition);
             if ($changed) {
                 $form->revision = ($form->revision ?? 0) + 1;
+            } else {
+                unset($attributes['definition']);
             }
             if ($form->archived_at !== null) {
                 $attributes['published'] = false;
@@ -175,22 +204,40 @@ class Importer
             return $form;
         });
 
-        if (($form ?? Form::where('legacy_id', $id)->first())?->archived_at !== null) {
+        if ($form?->archived_at !== null) {
             $attributes['published'] = false;
             $warnings[] = '新環境でアーカイブされたフォームの公開停止を維持します。';
         }
-        $histories = $attachments = 0;
-        foreach ($this->source->table('histories')->where('form_id', $id)->lazyById(200) as $history) {
-            $histories++;
-            $attachments += $this->history((array) $history, $fields, $form, $warnings);
+        if ($this->verification) {
+            $currentPath = $form?->published && !$form->archived_at && empty($form->definition['issues'])
+                ? PublicFormUrl::entry('', $form->slug) : null;
+            $state = !$form ? 'missing' : ($form->slug === $attributes['slug'] && $form->name === $attributes['name']
+                && $form->published === $attributes['published'] && $this->sameJson($form->definition, $definition) ? 'matched' : 'changed');
+            $check = $this->verification->check($id, $form, $state);
+            $histories = $check['source']['histories'];
+            $attachments = $check['files']['expected'] - $check['files']['source_unavailable'];
+        } else {
+            $histories = $attachments = 0;
+            foreach ($this->source->table('histories')->where('form_id', $id)->lazyById(200) as $history) {
+                $histories++;
+                $attachments += $this->history((array) $history, $fields, $form, $warnings);
+            }
         }
-        return ['legacy_id' => $id, 'form_id' => $form?->id, 'source_url' => (string) $row['url'], 'url' => '/'.$slug, 'published' => $attributes['published'],
+        return ['legacy_id' => $id, 'form_id' => $this->dryRun && !$this->verification ? null : $form?->id, 'source_url' => (string) $row['url'], 'source_published' => !$orphan && (int) $row['view_flag'] === 1,
+            'url' => PublicFormUrl::entry('', $slug), 'published' => $attributes['published'],
+            ...($this->verification ? ['current_public_path' => $currentPath] : []),
             'field_count' => count($fields), 'history_count' => $histories, 'resolved_files' => $attachments, 'issues' => $definition['issues'], 'warnings' => $warnings];
+    }
+
+    private function sourceUses(string $slug, ?int $except = null): bool
+    {
+        return $this->source->table('forms')->whereRaw("LOWER(COALESCE(url, '')) = LOWER(?)", [$slug])
+            ->when($except !== null, fn ($query) => $query->where('id', '!=', $except))->exists();
     }
 
     private function occupied(string $slug, int $id): bool
     {
-        return Form::where('slug', $slug)->where(fn ($q) => $q->whereNull('legacy_id')->orWhere('legacy_id', '!=', $id))->exists();
+        return Form::whereRaw('LOWER(slug) = LOWER(?)', [$slug])->where(fn ($q) => $q->whereNull('legacy_id')->orWhere('legacy_id', '!=', $id))->exists();
     }
 
     private const BLOCK_KEYS = [
@@ -271,13 +318,34 @@ class Importer
                 }
                 $same = $reference && $this->comparable($reference) == $this->comparable($field);
                 $counts[$same ? 'stock' : 'custom']++;
-                if ($this->dryRun || ($same && !FieldTemplate::where('legacy_id', $id)->exists())) {
+                if ($this->dryRun) {
                     continue;
                 }
-                FieldTemplate::updateOrCreate(['legacy_id' => $id], ['definition' => $field]);
+                $template = FieldTemplate::where('legacy_id', $id)->first();
+                if (($template && $this->sameJson($template->definition, $field)) || (!$template && $same)) {
+                    continue;
+                }
+                ($template ?? new FieldTemplate(['legacy_id' => $id]))->fill(['definition' => $field])->save();
             }
         });
         return $counts;
+    }
+
+    /** MySQL JSON can reorder object keys. Form field order and scalar values remain significant. */
+    private function sameJson(mixed $left, mixed $right): bool
+    {
+        if ($left === $right) {
+            return true;
+        }
+        if (!is_array($left) || !is_array($right) || count($left) !== count($right) || array_is_list($left) !== array_is_list($right)) {
+            return false;
+        }
+        foreach ($left as $key => $value) {
+            if (!array_key_exists($key, $right) || !$this->sameJson($value, $right[$key])) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** Shipped definitions omit empty metadata and generated DB columns. */
@@ -320,33 +388,71 @@ class Importer
             $submission = ($this->dryRun ? $query : $query->lockForUpdate())->first();
             if ($submission && (!$submission->retain || $submission->purged_at !== null)) {
                 $warnings[] = "履歴 #{$row['id']}: 新環境で消去されたため復元を省きます。";
+                if (!$this->dryRun && (int) $submission->form_id !== (int) $form->id) {
+                    // Keep only the ID mapping when the source reassigns an erased history to another form.
+                    DB::table('submissions')->where('id', $submission->id)->update(['form_id' => $form->id]);
+                }
+                if (!$this->dryRun && $submission->purged_at !== null) {
+                    $this->cleanAfterCommit($submission);
+                }
                 return 0;
             }
-            $keys = ['id','created_at','updated_at','form_id','form_name','admin_email','user_email','mail_title','content','theme_name','bcc_email','cc_email','conf_mail_flag','include_submissions','include_submissions_admin_email','url','template','attach_files'];
-            $row = $this->knownAttributes($row, $keys, 'histories', $warnings);
+            $row = $this->knownAttributes($row, HistoryReader::COLUMNS, 'histories', $warnings);
             [$historicalFields, $answers] = $this->reader->answers($row, $fields, $warnings);
-            $files = $this->reader->files($row, $this->attachmentDirectory, $warnings);
+            $unsafe = 0;
+            $files = $this->reader->files($row, $this->attachmentDirectory, $warnings, $unsafe);
+            $resolved = count(array_filter($files));
             if ($this->dryRun) {
-                return count($files);
+                return $resolved;
             }
             $submission ??= new Submission(['legacy_id' => $row['id'], 'token' => (string) Str::uuid()]);
-            $fileFields = array_values(array_filter($historicalFields, fn ($f) => $f['form_type'] === 'file'));
             $snapshot = ['legacy_version' => $this->version, 'name' => $row['form_name'], 'legacy_history' => $row, 'definition' => ['fields' => $historicalFields, 'settings' => ['name' => $row['form_name']]]];
-            if (!$submission->exists || ($submission->snapshot['legacy_history'] ?? null) != $row) {
-                $submission->fill(['form_id' => $form->id, 'snapshot' => $snapshot, 'answers' => $answers, 'created_at' => $row['created_at'], 'updated_at' => $row['updated_at']]);
+            if (!$submission->exists || !$this->reader->matches($submission, $row, $historicalFields, $answers)) {
+                $submission->fill(['snapshot' => $snapshot, 'answers' => $answers]);
             }
+            $submission->fill(['form_id' => $form->id, 'created_at' => $row['created_at'], 'updated_at' => $row['updated_at']]);
             $submission->timestamps = false;
             if ($submission->isDirty()) {
                 $submission->save();
             }
+            $key = $this->reader->attachmentKey($submission->snapshot['definition']['fields'], count($files));
+            $groups = $submission->attachments()->orderBy('id')->get()->groupBy('name');
             foreach ($files as $name => $path) {
+                if ($path === null) {
+                    $groups->forget($name);
+                    continue;
+                }
                 $meta = $this->reader->copy($path, (string) $name, (int) $row['id']);
-                // The legacy row has no original filename or reliable field association.
-                $key = count($fileFields) === 1 && count($files) === 1 ? $fileFields[0]['name'] : 'legacy_attachment';
-                $submission->attachments()->updateOrCreate(['name' => $name], [...$meta, 'field_key' => $key]);
+                $attachment = $groups->get($name)?->shift() ?? $submission->attachments()->make();
+                $attachment->fill([...$meta, 'field_key' => $key]);
+                if ($attachment->isDirty()) {
+                    $attachment->save();
+                }
             }
-            return count($files);
+            if (!$unsafe) {
+                foreach ($groups as $extras) {
+                    foreach ($extras as $obsolete) {
+                        $obsolete->delete();
+                    }
+                }
+            }
+            $this->cleanAfterCommit($submission);
+            return $resolved;
         };
         return $this->dryRun ? $import() : DB::transaction($import, attempts: 3);
+    }
+
+    private function cleanAfterCommit(Submission $submission): void
+    {
+        DB::afterCommit(function () use ($submission) {
+            $disk = Storage::disk('local');
+            if (!$disk->directoryExists('easymail/'.$submission->legacy_id)) {
+                return;
+            }
+            $unused = $this->reader->unusedCopies($submission->legacy_id, $submission->attachments()->pluck('path')->all());
+            if ($unused && !$disk->delete($unused)) {
+                throw new RuntimeException("履歴 #{$submission->legacy_id} の旧添付コピーを削除できません。権限を確認して再実行してください。");
+            }
+        });
     }
 }

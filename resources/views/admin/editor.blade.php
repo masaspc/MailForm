@@ -75,7 +75,7 @@
 </form>
 @if($form)
 <section class="panel stack" id="publish"><h2>公開設定</h2>
-    <p>保存済みの版を公開します。@if($form->published)現在の公開パスは <a class="text-link" href="{{ url($form->slug) }}">/{{ $form->slug }}</a> です。@endif</p>
+    <p>保存済みの版を公開します。@if($form->published)現在の公開パスは <a class="text-link" href="{{ $form->publicPath() }}">{{ $form->publicPath() }}</a> です。@endif</p>
     <div class="actions">
         @if(!$form->published || $form->draft_definition)<form method="post" action="{{ route('admin.publish', $form) }}" data-saved-action>@csrf
         <input type="hidden" name="version" value="{{ $version }}"><button class="primary">保存済みの内容を公開</button></form>@endif

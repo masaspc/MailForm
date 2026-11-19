@@ -2,6 +2,7 @@
 
 namespace App\Services\EasyMail;
 
+use App\Services\PublicFormUrl;
 use FilesystemIterator;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
@@ -60,10 +61,15 @@ class InstallationAudit
             $prefix = "resources/lang/{$language}/";
             array_push($issues, ...$this->differences(array_filter($this->manifest, fn ($path) => str_starts_with($path, $prefix), ARRAY_FILTER_USE_KEY)));
         }
-        if (preg_match('/^[\pL\pN_-]*$/uD', $slug)) {
-            $override = 'resources/views/theme/'.($slug === '' ? 'index' : $slug).'.blade.php';
-            if (is_file($this->root.'/'.$override)) {
-                $issues[] = "URL別テンプレート: {$override}";
+        if (PublicFormUrl::isSegment($slug)) {
+            // The upstream view finder treats dots as directories when resolving theme.{url}.
+            $view = 'resources/views/theme/'.($slug === '' ? 'index' : str_replace('.', '/', $slug));
+            foreach (['blade.php', 'php', 'css', 'html'] as $extension) {
+                $override = $view.'.'.$extension;
+                if (is_file($this->root.'/'.$override) || is_link($this->root.'/'.$override)) {
+                    $issues[] = "URL別テンプレート: {$override}";
+                    break;
+                }
             }
         }
         return $issues;

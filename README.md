@@ -2,6 +2,12 @@
 
 EasyMail 2.00.133・2.01.004のフォームを引き継いで、自分のサーバーで問い合わせ・申込・アンケートを受け付けるための日本語メールフォームCMSです。既存フォームの公開URL・項目順・通知設定の移行と、新規フォームの作成に対応します。EasyMailとは独立したプロジェクトです。
 
+## 旧EasyMailから移行する方へ
+
+1. **旧サイトの管理画面とバージョンを確認する。** 管理入口は「EasyMailの設置URL＋`/admin`」です。たとえば `/contact/` に設置し、申込フォームが `/contact/recruit` なら、管理入口は `/contact/admin` です。ログイン後、管理トップの製品名の横に版番号があります。旧PHPが動かないときは設置ファイルをテキストで確認できます。[旧サイトの確認手順](docs/EASYMAIL-VERSION.md)
+2. **新サーバーを準備する。** AlmaLinux 10.3 Minimalを用意してSSHで入れるところから、PHP-FPM、nginx、MariaDB、HTTPS、管理者、メール定期配信を設定します。[AlmaLinux 10.3 Minimalの公開手順](docs/ALMALINUX10.md)
+3. **現行URLで練習し、受付を引き継ぐ。** 旧版が実際の申込を受けている間に、別DBで取込・画面・メールを検証します。短い受付停止中に最終コピーを取り込み、受付件数・添付を照合してから同じURLの接続先を切り替えます。[並行稼働・切替・切り戻し](docs/CUTOVER.md)・[URLの照合](docs/URLS.md)・[DBと添付の取込](docs/IMPORT.md)
+
 ![3種類のフォームを管理する画面](docs/images/forms.png)
 
 ## 管理画面でできること
@@ -21,7 +27,7 @@ EasyMail 2.00.133・2.01.004のフォームを引き継いで、自分のサー�
 
 ## 設置
 
-PHP 8.4 / 8.5、Composer 2、MariaDB 11.4またはMySQL 8.4、SMTPサーバー、毎分のcronを用意します。PHPにはLaravelの標準拡張に加え、PDO MySQL、mbstring、DOM、fileinfoを有効にします。Node.jsは不要です。
+PHP 8.4 / 8.5、Composer 2、MariaDB 11.4 / 11.8またはMySQL 8.4、SMTPサーバー、毎分のcronまたはsystemdタイマーを用意します。PHPにはLaravelの標準拡張に加え、PDO MySQL、mbstring、DOM、fileinfoを有効にします。Node.jsは不要です。
 
 1. 空のDBと、このDBを利用できるユーザーを作成します。文字コードは `utf8mb4` を使用してください。
 2. このリポジトリを取得し、プロジェクト直下で以下を実行します。Webサーバーの公開ディレクトリは **`public/`** に設定します。`storage/` と `bootstrap/cache/` はPHPの実行ユーザーが書き込めるようにします。
@@ -58,6 +64,7 @@ cronの例では、PHP実行ファイルと設置先を実環境のパスに置�
 ```sh
 php artisan easymail:import --source-root=/path/to/EasyMail --dry-run
 php artisan easymail:import --source-root=/path/to/EasyMail --form=1
+php artisan easymail:import --verify-only --source-root=/path/to/EasyMail --form=1
 ```
 
 同じ旧フォームIDからの再実行は移行済みデータを識別します。移行中は元データを正とし、新版での編集・公開を始める前に最終取込を終えてください。取り込んだ履歴から過去のメールを再送することはありません。[移行手順と公開判定](docs/IMPORT.md)
@@ -83,5 +90,7 @@ PHPUnitの既定DBはインメモリSQLiteです。MariaDB/MySQLを試験する�
 ## ライセンス
 
 MailFormは[MITライセンス](LICENSE)で公開しています。EasyMail由来の標準項目・プリセットとレイアウトの元情報は株式会社ファーストネットジャパンによるものです。[EasyMailの著作権表示とライセンス](licenses/EasyMail.txt)・[公式配布元](https://www.mubag.com/download/)
+
+MITライセンスでは私的な変更や運用も可能です。GitHubでの公開は任意です。ソフトウェアの複製または重要な部分を配布する際には、著作権表示とライセンス本文を同梱してください。[MITライセンス原文](https://opensource.org/license/mit)
 
 Laravelのアプリケーションひな型とフレームワークはMITライセンスです。依存パッケージは各パッケージに記載されたライセンスに従います。[Laravelの著作権表示](licenses/Laravel.txt)・[郵便番号データの出典](public/assets/form-postal/SOURCE.txt)

@@ -3,8 +3,6 @@
 @section('content')
 @php
     $settings = $form->definition['settings'];
-    $params = $form->slug === '' ? [] : ['slug' => $form->slug];
-    $prefix = $form->slug === '' ? 'public.root.' : 'public.';
     $hasErrors = $problems->isNotEmpty();
 @endphp
 @if($hasErrors)
@@ -15,7 +13,7 @@
 @if($intro = ($settings[($hasErrors ? 'error' : 'input').'_form_header_message'] ?? ''))
 <p class="message">{{ \App\Services\SafeMarkup::render($intro) }}</p>
 @endif
-<form method="post" action="{{ route($prefix.'confirm', $params) }}" enctype="multipart/form-data" data-entry data-messages="{{ json_encode(\App\Services\PublicLocale::browserMessages(), JSON_UNESCAPED_UNICODE) }}" data-warn="{{ (int)($settings['beforeunload_flag'] ?? 0) }}" data-no-enter="{{ (int)($settings['enter_forbidden_flag'] ?? 0) }}">
+<form method="post" action="{{ $form->publicPath('confirm') }}" enctype="multipart/form-data" data-entry data-messages="{{ json_encode(\App\Services\PublicLocale::browserMessages(), JSON_UNESCAPED_UNICODE) }}" data-warn="{{ (int)($settings['beforeunload_flag'] ?? 0) }}" data-no-enter="{{ (int)($settings['enter_forbidden_flag'] ?? 0) }}">
 @csrf
 <input type="hidden" name="receipt_token" value="{{ $draft['token'] }}">
 @foreach($controls as $group)
@@ -62,7 +60,7 @@
 <input @include('public.attributes') type="{{ $type === 'datetime' ? 'datetime-local' : $type }}" value="{{ $value }}" @if($type === 'number') step="any" @endif>
 @endif
 @if($field['form_type'] === 'zp_address' && $loop->first)
-<button class="secondary lookup" type="button" data-lookup="{{ asset('assets/form-postal') }}">{{ __('郵便番号から住所を検索') }}</button>
+<button class="secondary lookup" type="button" data-lookup="{{ \App\Services\PublicFormUrl::asset('form-postal') }}">{{ __('郵便番号から住所を検索') }}</button>
 <select data-address-choices hidden aria-label="{{ __('住所の候補') }}"></select>
 <span class="hint" data-lookup-result aria-live="polite"></span>
 @endif

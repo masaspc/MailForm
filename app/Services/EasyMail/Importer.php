@@ -121,7 +121,7 @@ class Importer
         $removed = Form::whereNotNull('legacy_id')->whereIntegerNotInRaw('legacy_id', $present)->orderBy('legacy_id')->pluck('legacy_id')->all();
         if (!$this->dryRun) {
             foreach (array_chunk($removed, 200) as $ids) {
-                Form::whereIn('legacy_id', $ids)->where('published', true)->update(['published' => false]);
+                $this->guard->transaction(fn () => Form::whereIn('legacy_id', $ids)->where('published', true)->update(['published' => false]));
             }
         }
         return $removed;
@@ -183,7 +183,7 @@ class Importer
         $name = (string) ($row['name'] ?: "旧フォーム #{$id}");
         $attributes = ['slug' => $slug, 'name' => mb_substr($name, 0, 255), 'published' => (int) $row['view_flag'] === 1 && !$issues, 'definition' => $definition];
 
-        $form = $this->dryRun ? Form::where('legacy_id', $id)->first() : DB::transaction(function () use ($id, $attributes, $definition) {
+        $form = $this->dryRun ? Form::where('legacy_id', $id)->first() : $this->guard->transaction(function () use ($id, $attributes, $definition) {
             $form = Form::where('legacy_id', $id)->lockForUpdate()->first() ?? new Form(['legacy_id' => $id]);
             $changed = !$form->exists || !$this->sameJson($form->definition, $definition);
             if ($changed) {
@@ -325,7 +325,7 @@ class Importer
                 if (($template && $this->sameJson($template->definition, $field)) || (!$template && $same)) {
                     continue;
                 }
-                ($template ?? new FieldTemplate(['legacy_id' => $id]))->fill(['definition' => $field])->save();
+                $this->guard->transaction(fn () => ($template ?? new FieldTemplate(['legacy_id' => $id]))->fill(['definition' => $field])->save());
             }
         });
         return $counts;
@@ -439,7 +439,7 @@ class Importer
             $this->cleanAfterCommit($submission);
             return $resolved;
         };
-        return $this->dryRun ? $import() : DB::transaction($import, attempts: 3);
+        return $this->dryRun ? $import() : $this->guard->transaction($import, attempts: 3);
     }
 
     private function cleanAfterCommit(Submission $submission): void
@@ -450,6 +450,7 @@ class Importer
                 return;
             }
             $unused = $this->reader->unusedCopies($submission->legacy_id, $submission->attachments()->pluck('path')->all());
+            $this->guard->checkSession($submission->getConnection());
             if ($unused && !$disk->delete($unused)) {
                 throw new RuntimeException("履歴 #{$submission->legacy_id} の旧添付コピーを削除できません。権限を確認して再実行してください。");
             }

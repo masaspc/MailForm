@@ -4,17 +4,31 @@ namespace App\Services\EasyMail;
 
 use Closure;
 use Illuminate\Database\Connection;
+use Illuminate\Support\Facades\DB;
+use PDO;
 use RuntimeException;
 
 final class ImportGuard
 {
+    private ?PDO $session = null;
+
     public function run(Connection $source, Connection $target, Closure $work): mixed
     {
         if ($source->getReadPdo() === $target->getPdo()) {
             $this->sameDatabase();
         }
+        $guarded = function () use ($target, $work) {
+            $this->session = $target->getPdo();
+            try {
+                $result = $work();
+                $this->checkSession($target);
+                return $result;
+            } finally {
+                $this->session = null;
+            }
+        };
         if ($target->getDriverName() === 'sqlite') {
-            return $this->sqlite($source, $target, $work);
+            return $this->sqlite($source, $target, $guarded);
         }
         if (!in_array($target->getDriverName(), ['mysql', 'mariadb'], true)) {
             throw new RuntimeException('移行先DBには MariaDB、MySQL、SQLite を指定してください。');
@@ -32,7 +46,23 @@ final class ImportGuard
                 }
             });
         }
-        return $this->mysqlLock($target, 'mailform-easymail-'.sha1($name), $work);
+        return $this->mysqlLock($target, 'mailform-easymail-'.sha1($name), $guarded);
+    }
+
+    /** Laravel can reconnect between transactions. Only the session holding the lock may write. */
+    public function transaction(Closure $work, int $attempts = 1): mixed
+    {
+        return DB::transaction(function (Connection $connection) use ($work) {
+            $this->checkSession($connection);
+            return $work();
+        }, $attempts);
+    }
+
+    public function checkSession(Connection $connection): void
+    {
+        if ($this->session !== null && $connection->getPdo() !== $this->session) {
+            $this->lostLock();
+        }
     }
 
     private function mysqlLock(Connection $target, string $name, Closure $work): mixed
@@ -47,7 +77,9 @@ final class ImportGuard
         try {
             return $work();
         } finally {
-            $target->scalar('SELECT RELEASE_LOCK(?)', [$name], false);
+            if ((int) $target->scalar('SELECT RELEASE_LOCK(?)', [$name], false) !== 1) {
+                $this->lostLock();
+            }
         }
     }
 
@@ -90,5 +122,10 @@ final class ImportGuard
     private function busy(): never
     {
         throw new RuntimeException('同じ移行先で別の取込・診断・照合を実行中です。終了後に再実行してください。');
+    }
+
+    private function lostLock(): never
+    {
+        throw new RuntimeException('移行先DBの排他接続が切れました。同じ複製で再実行し、照合してください。');
     }
 }

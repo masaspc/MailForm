@@ -435,6 +435,38 @@ class EasyMailImportTest extends TestCase
         }
     }
 
+    public function test_reconnected_target_cannot_enter_a_write_transaction_or_report_a_successful_check(): void
+    {
+        $default = DB::getDefaultConnection();
+        config(['database.connections.handoff_reconnect' => DB::connection()->getConfig()]);
+        DB::setDefaultConnection('handoff_reconnect');
+        $target = DB::connection();
+        $guard = app(ImportGuard::class);
+        $entered = false;
+        try {
+            $guard->run($this->legacy, $target, function () use ($target, $guard, &$entered) {
+                $original = $target->getPdo();
+                DB::reconnect('handoff_reconnect');
+                $this->assertNotSame($original, $target->getPdo());
+                try {
+                    $guard->transaction(function () use (&$entered) {
+                        $entered = true;
+                    });
+                    $this->fail('A replaced DB session entered the write transaction.');
+                } catch (\RuntimeException $e) {
+                    $this->assertStringContainsString('排他接続が切れました', $e->getMessage());
+                }
+            });
+            $this->fail('A run without its original DB session reported success.');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('排他接続が切れました', $e->getMessage());
+            $this->assertFalse($entered);
+        } finally {
+            DB::setDefaultConnection($default);
+            DB::purge('handoff_reconnect');
+        }
+    }
+
     private function verify(int $expected = 0, array $options = []): array
     {
         $code = Artisan::call('easymail:import', ['--verify-only' => true, '--json' => true, '--source-version' => '2.01.004', '--attachments' => $this->dir, ...$options]);

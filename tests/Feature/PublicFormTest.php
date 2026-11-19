@@ -224,6 +224,91 @@ class PublicFormTest extends TestCase
         $this->assertSame('試験 太郎 / 0', Delivery::sole()->payload['subject']);
     }
 
+    public static function addressFormats(): array
+    {
+        return [
+            '2.00.124' => ['2.00.124', '', '住所', '住所'],
+            '2.00.125' => ['2.00.125', '', '住所', '住所'],
+            '2.00.133' => ['2.00.133', 'zp_address', '送付先', '郵便番号付き住所'],
+            '2.01.004' => ['2.01.004', 'zp_address', '送付先', '郵便番号付き住所'],
+        ];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('addressFormats')]
+    public function test_address_posts_and_receipts_preserve_the_imported_release_format(string $version, string $suffix, string $mailTitle, string $historyTitle): void
+    {
+        $form = $this->form('contact');
+        $definition = $form->definition;
+        $definition['source_version'] = $version;
+        $definition['settings']['mail_title'] = '受付［#zp_address#］';
+        $definition['fields'] = [[
+            'id' => 21, 'name' => 'zp_address', 'title' => '送付先', 'form_type' => 'zp_address',
+            'required' => 1, 'pref_choices' => ['東京都'],
+        ]];
+        $form->update(['definition' => $definition]);
+
+        $this->get('/contact')->assertOk()->assertSee('送付先')
+            ->assertSee('name="zip'.$suffix.'"', false)->assertSee('name="pref'.$suffix.'"', false)->assertSee('name="address'.$suffix.'"', false);
+        $token = $this->token('/contact');
+        $input = ['receipt_token' => $token, 'source_version' => $suffix === '' ? '2.00.133' : '2.00.124',
+            'zip'.$suffix => '100-0001', 'pref'.$suffix => '東京都', 'address'.$suffix => '千代田区千代田'];
+        $this->post('/contact', array_replace($input, ['pref'.$suffix => '大阪府']))->assertUnprocessable();
+        $this->post('/contact', $input)->assertOk()->assertSee('千代田区千代田');
+        $this->post('/contact/back', ['receipt_token' => $token])->assertOk()->assertSee('value="100-0001"', false);
+        $this->post('/contact/confirm', $input)->assertOk();
+        $this->post('/contact/send', ['receipt_token' => $token])->assertRedirect('/contact/thanks');
+
+        $receipt = $form->submissions()->sole();
+        $this->assertSame("100-0001\n東京都\n千代田区千代田", $receipt->answers['zp_address']);
+        $mail = Delivery::sole()->payload;
+        $this->assertSame($suffix === '' ? '受付［］' : '受付［100-0001 東京都 千代田区千代田］', $mail['subject']);
+        $this->assertStringContainsString($mailTitle.":\n100-0001\n東京都\n千代田区千代田", $mail['body']);
+        $cells = app(\App\Services\Admin\HistoryRows::class)->cells($receipt);
+        $this->assertSame([$historyTitle], array_column($cells, 'title'));
+        $this->assertSame(['100-0001東京都千代田区千代田'], array_column($cells, 'value'));
+    }
+
+    public function test_older_custom_address_tag_uses_the_posted_component_with_that_name(): void
+    {
+        $form = $this->form();
+        $definition = $form->definition;
+        $definition['source_version'] = '2.00.124';
+        $definition['fields'] = [['name' => 'address', 'title' => '所在地', 'form_type' => 'zp_address']];
+        $definition['settings']['thanks_message'] = '番地［#address#］';
+        $form->update(['definition' => $definition]);
+
+        $token = $this->token();
+        $this->post('/confirm', ['receipt_token' => $token, 'zip' => '100-0001', 'pref' => '東京都', 'address' => '千代田区千代田'])->assertOk();
+        $this->post('/send', ['receipt_token' => $token])->assertRedirect('/thanks');
+        $this->get('/thanks')->assertOk()->assertSee('番地［千代田区千代田］');
+        $cells = app(\App\Services\Admin\HistoryRows::class)->cells($form->submissions()->sole());
+        $this->assertSame(['所在地'], array_column($cells, 'title'));
+        $this->assertSame(['100-0001東京都千代田区千代田'], array_column($cells, 'value'));
+    }
+
+    public function test_admin_publication_detects_field_names_already_used_by_an_older_address(): void
+    {
+        $form = $this->form('contact');
+        $definition = $form->definition;
+        $definition['settings'] = ['url' => 'contact', 'admin_email' => 'office@example.test'];
+        $definition['fields'] = [
+            ['id' => 21, 'name' => 'zp_address', 'title' => '住所', 'form_type' => 'zp_address'],
+            ['id' => 4, 'name' => 'zip', 'title' => '別の郵便番号', 'form_type' => 'text'],
+        ];
+        $definition['source_version'] = '2.00.125';
+        $form->update(['published' => false, 'definition' => $definition]);
+        $this->actingAs(\App\Models\User::create(['name' => '編集者', 'email' => 'editor@example.test', 'password' => 'test-password', 'role' => 'editor']));
+        $editor = app(\App\Services\Admin\FormEditor::class);
+        $this->post(route('admin.publish', $form), ['version' => $editor->version($form)])
+            ->assertSessionHasErrors(['definition' => '入力欄の名前またはHTML IDが重複しています: zip']);
+        $this->assertFalse($form->refresh()->published);
+
+        $definition['source_version'] = '2.00.133';
+        $form->update(['definition' => $definition]);
+        $this->post(route('admin.publish', $form), ['version' => $editor->version($form)])->assertSessionHasNoErrors();
+        $this->get('/contact')->assertOk()->assertSee('name="zipzp_address"', false)->assertSee('name="zip"', false);
+    }
+
     public function test_limits_and_upload_format_error_leave_the_receipt_unconfirmed(): void
     {
         Storage::fake('local');

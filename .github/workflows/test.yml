@@ -52,6 +52,27 @@ jobs:
           DB_PORT: ${{ job.services.database.ports[3306] }}
           DB_USERNAME: root
           DB_PASSWORD: ci-only
+      - name: Check the official EasyMail 2.00 files for this rehearsal
+        if: matrix.database.image == 'mariadb:11.8'
+        env:
+          SOURCE_VERSION: ${{ matrix.php == '8.4' && '2.00.125' || '2.00.124' }}
+        run: |
+          case "$SOURCE_VERSION" in
+            2.00.124) digest=e6feee0db39b76264c821eef2b545d64e048853bc0d1dd651e07e95c2b7d51fc ;;
+            2.00.125) digest=cd5ca372d19b64450107c4014ff6c31b8a8d50cf84822d7fa54d797cd171b4e1 ;;
+            *) exit 1 ;;
+          esac
+          archive="$RUNNER_TEMP/EasyMail_$SOURCE_VERSION.zip"
+          curl --proto '=https' --fail --silent --show-error --location --retry 3 --max-time 90 \
+            "https://www.mubag.com/download/$SOURCE_VERSION/EasyMail_$SOURCE_VERSION.zip" -o "$archive"
+          printf '%s  %s\n' "$digest" "$archive" | sha256sum --check
+          base="EasyMail_$SOURCE_VERSION/em_laravel"
+          unzip -q "$archive" "$base/config/app.php" "$base/config/append.php" "$base/routes/web.php" \
+            "$base/app/Http/Controllers/IndexController.php" "$base/app/Library/Common.php" "$base/app/Mail/ContactMail.php" \
+            "$base/resources/views/theme/*" "$base/resources/lang/*" -d "$RUNNER_TEMP"
+          jq -r 'to_entries[] | "\(.value)  \(.key)"' "resources/easymail/$SOURCE_VERSION-sha256.json" | \
+            (cd "$RUNNER_TEMP/$base" && sha256sum --check --quiet)
+          echo "EASYMAIL_SOURCE_ROOT=$RUNNER_TEMP/$base" >> "$GITHUB_ENV"
       - name: Rehearse a second snapshot from a read-only legacy database
         env:
           CONTAINER_ID: ${{ job.services.database.id }}
@@ -68,6 +89,7 @@ jobs:
           LEGACY_DB_USERNAME: legacy_reader
           LEGACY_DB_PASSWORD: ci-reader
           MAILFORM_DELIVERY_ENABLED: 'false'
+          APP_URL: https://forms.example.test
         run: |
           db() { docker exec -i -e MYSQL_PWD="$DB_PASSWORD" "$CONTAINER_ID" "$DB_CONNECTION" --user=root "$@"; }
           db <<'SQL'
@@ -79,7 +101,24 @@ jobs:
           db easymail_snapshot < tests/Fixtures/easymail-2.01.004.sql
           php artisan key:generate --force
           php artisan migrate --force
-          import() { php artisan easymail:import --source-version=2.01.004 --json "$@"; }
+          options=(--source-version=2.01.004)
+          if [[ -n ${EASYMAIL_SOURCE_ROOT:-} ]]; then
+            db easymail_snapshot <<'SQL'
+          CREATE TABLE migrations (migration VARCHAR(255));
+          INSERT INTO migrations VALUES ('2020_02_20_174440_create_forms_table');
+          CREATE TABLE cache (`key` VARCHAR(255), value TEXT, expiration INTEGER);
+          UPDATE histories SET attach_files = CONCAT(REPEAT('a', 40), '.txt') WHERE id = 80;
+          SQL
+            files="$EASYMAIL_SOURCE_ROOT/storage/app/attach_file"
+            mkdir -p "$files"
+            printf 'fixture' > "$files/$(printf 'a%.0s' {1..40}).txt"
+            options=(--source-root="$EASYMAIL_SOURCE_ROOT" --source-base="$APP_URL" --strict)
+          fi
+          import() { php artisan easymail:import "${options[@]}" --json "$@"; }
+          import --dry-run > "$RUNNER_TEMP/diagnosis.json"
+          if [[ -n ${EASYMAIL_SOURCE_ROOT:-} ]]; then
+            jq -e '.extra_tables == [] and .forms[0].same_public_url and .forms[0].resolved_files == 1' "$RUNNER_TEMP/diagnosis.json"
+          fi
           import > "$RUNNER_TEMP/first.json"
           db easymail_snapshot -e 'INSERT INTO histories (id, form_id, content, created_at, updated_at) SELECT 81, form_id, content, created_at, updated_at FROM histories WHERE id = 80'
           status=0

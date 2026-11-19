@@ -15,7 +15,7 @@ class ImportEasyMail extends Command
     protected $signature = 'easymail:import
         {--dry-run : 診断のみ。新DB・添付ストレージへの書き込みを省く}
         {--verify-only : 旧複製と移行済みのフォーム・履歴・非公開添付を読み取り照合し、差異があれば終了コード2を返す}
-        {--source-version= : 旧版（DB単独の場合に必須、2.00.133 / 2.01.004）}
+        {--source-version= : 旧版（DB単独の場合に必須、2.00.124 / 2.00.125 / 2.00.133 / 2.01.004）}
         {--source-root= : 旧EasyMailの設置ディレクトリ（バックアップ）}
         {--source-base= : 旧公開URLの設置先（例 https://example.jp/form）。旧・新の公開入口を一覧に追加}
         {--attachments= : 旧 storage/app/attach_file の場所を指定}
@@ -23,7 +23,7 @@ class ImportEasyMail extends Command
         {--json : 診断結果をJSONで出力}
         {--strict : 公開保留または照合警告がある場合は終了コード2を返す}';
 
-    protected $description = 'EasyMail 2.00.133 / 2.01.004 の複製DBからフォーム・受信履歴・添付を移行する';
+    protected $description = 'EasyMail の複製DBからフォーム・受信履歴・添付を移行する';
 
     public function handle(Importer $importer): int
     {

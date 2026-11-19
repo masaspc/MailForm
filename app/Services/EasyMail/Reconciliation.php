@@ -13,7 +13,7 @@ final class Reconciliation
     private array $forms = [];
     private const PRIVACY = ['retained' => 0, 'pending_purge' => 0, 'purged' => 0];
 
-    public function __construct(private Connection $source, private HistoryReader $reader, private ?string $directory) {}
+    public function __construct(private Connection $source, private HistoryReader $reader, private ?string $directory, private string $version) {}
 
     public function check(?int $legacyId, ?Form $form, string $state): array
     {
@@ -100,10 +100,11 @@ final class Reconciliation
             $this->difference($check, $status, $id);
         }
         $unsafe = 0;
-        $files = $this->reader->files($row, $this->directory, $warnings, $unsafe);
+        $links = $receipt?->attachments ?? collect();
+        $files = $this->reader->files($row, $this->directory, $warnings, $unsafe, $this->version, $links->pluck('name')->all());
         $recorded = $receipt?->snapshot['definition']['fields'] ?? [];
         $key = $this->reader->attachmentKey(is_array($recorded) ? $recorded : [], count($files));
-        $this->files($check, $id, $files, $unsafe, $receipt?->attachments ?? collect(), $key);
+        $this->files($check, $id, $files, $unsafe, $links, $key);
     }
 
     private function tombstone(array &$check, Submission $receipt): void

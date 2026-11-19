@@ -215,7 +215,7 @@ class FormEditor
         // Only re-evaluate issues attributed to definition validation by the importer.
         if (isset($base['validation_issues'], $base['installation_issues'])) {
             $other = array_diff($base['issues'], $base['validation_issues']);
-            $draft['validation_issues'] = $this->audit($settings, $fields);
+            $draft['validation_issues'] = $this->audit($draft);
             $draft['issues'] = array_values(array_unique([...$base['installation_issues'], ...$other, ...$draft['validation_issues']]));
         }
 
@@ -250,18 +250,19 @@ class FormEditor
         }
         $settings = $definition['settings'];
         $this->checkSlug((string) ($settings['url'] ?? $form->slug), $form);
-        $issues = $this->audit($settings, $definition['fields']);
+        $issues = $this->audit($definition);
         if ($issues) {
             throw ValidationException::withMessages(['definition' => $issues]);
         }
     }
 
-    private function audit(array $settings, array $fields): array
+    private function audit(array $definition): array
     {
+        $settings = $definition['settings'];
         $missingCaptcha = ! empty($settings['recaptcha_enabled']) && ! SpamProtection::configured();
         unset($settings['recaptcha_enabled']);
         $warnings = [];
-        $issues = app(FormAudit::class)->inspect($settings, $fields, $warnings);
+        $issues = app(FormAudit::class)->inspect($settings, $definition['fields'], $warnings, $definition['source_version'] ?? null);
         if ($missingCaptcha) {
             $issues[] = 'reCAPTCHAを使うには環境設定の RECAPTCHA_SITE_KEY と RECAPTCHA_SECRET を設定してください。';
         }

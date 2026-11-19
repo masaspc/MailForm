@@ -6,19 +6,24 @@ use RuntimeException;
 
 final readonly class SourceRelease
 {
-    public const VERSIONS = ['2.00.133', '2.01.004'];
+    public const VERSIONS = ['2.00.124', '2.00.125', '2.00.133', '2.01.004'];
 
     private function __construct(public string $version, public ?string $root) {}
+
+    public static function usesUnsuffixedAddress(?string $version): bool
+    {
+        return in_array($version, ['2.00.124', '2.00.125'], true);
+    }
 
     /** Read only the static version marker. Backup PHP and .env files are never executed. */
     public static function identify(?string $root, ?string $declared): self
     {
         if ($declared !== null && !in_array($declared, self::VERSIONS, true)) {
-            throw new RuntimeException('対応版は 2.00.133 と 2.01.004 です。');
+            throw new RuntimeException('対応版は '.implode(' / ', self::VERSIONS).' です。');
         }
         if ($root === null) {
             if ($declared === null) {
-                throw new RuntimeException('DB単独の移行は --source-version=2.00.133 または --source-version=2.01.004 を指定してください。DB列だけでは版を特定できません。');
+                throw new RuntimeException('DB単独の移行は --source-version に設置版（'.implode(' / ', self::VERSIONS).'）を指定してください。DB列だけでは版を特定できません。');
             }
             return new self($declared, null);
         }

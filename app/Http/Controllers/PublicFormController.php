@@ -48,7 +48,8 @@ class PublicFormController extends Controller
 
     private function input(Form $form, array $draft, ?MessageBag $problems = null)
     {
-        $controls = $this->fields->controls($form->definition['fields']);
+        $definition = $form->definition;
+        $controls = $this->fields->controls($definition['fields'], $definition['source_version'] ?? null);
         return response()->view('public.input', [
             'form' => $form, 'draft' => $draft, 'controls' => collect($controls)->groupBy('field'),
             'problems' => $problems ?? new MessageBag(),
@@ -74,7 +75,9 @@ class PublicFormController extends Controller
             return $this->redirectThanks($form);
         }
 
-        $controls = $this->fields->controls($form->definition['fields']);
+        $definition = $form->definition;
+        $sourceVersion = $definition['source_version'] ?? null;
+        $controls = $this->fields->controls($definition['fields'], $sourceVersion);
         $disk = Storage::disk('local');
         $previousPaths = array_column($draft['files'], 'path');
         foreach (array_keys($draft['files']) as $key) {
@@ -121,7 +124,7 @@ class PublicFormController extends Controller
         if (!$valid) {
             return $this->input($form, $draft, $validator->errors());
         }
-        $answers = $this->fields->answers($form->definition['fields'], $values, $draft['files']);
+        $answers = $this->fields->answers($definition['fields'], $values, $draft['files'], $sourceVersion);
         return response()->view('public.confirm', compact('form', 'draft', 'answers'))->header('Cache-Control', 'no-store');
     }
 
@@ -147,8 +150,9 @@ class PublicFormController extends Controller
         abort_unless($draft['confirmed'], 409, __('入力内容を確認してから送信してください。'));
         app(\App\Services\SpamProtection::class)->verify($request, $form);
         $definition = $form->definition;
-        $answers = $this->fields->answers($definition['fields'], $draft['values'], $draft['files']);
-        $tags = $this->message->tags($definition['fields'], $answers, $request);
+        $sourceVersion = $definition['source_version'] ?? null;
+        $answers = $this->fields->answers($definition['fields'], $draft['values'], $draft['files'], $sourceVersion);
+        $tags = $this->message->tags($definition['fields'], $answers, $request, $sourceVersion, $draft['values']);
         $thanks = strtr($definition['settings']['thanks_message'] ?? '', $tags);
         $disk = Storage::disk('local');
         $copied = [];
@@ -161,7 +165,7 @@ class PublicFormController extends Controller
                 }
                 $submission = Submission::create(['form_id' => $form->id, 'token' => $draft['token'],
                     'answers' => $answers, 'snapshot' => ['definition' => $definition, 'revision' => $form->revision,
-                        'compound_labels' => PublicLocale::compoundLabels($definition['fields']),
+                        'compound_labels' => PublicLocale::compoundLabels($definition['fields'], $definition['source_version'] ?? null),
                         'retain' => !empty($definition['settings']['save_data'])]]);
                 $ids = [];
                 foreach ($draft['files'] as $key => $file) {

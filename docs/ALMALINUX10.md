@@ -8,7 +8,7 @@
 
 - VPS や仮想マシンで **AlmaLinux 10.3 Minimal** を選び、管理者の SSH 公開鍵を登録します。練習中の受信許可は管理元からの SSH だけで足ります。SSH で入り、`cat /etc/almalinux-release` が 10.3、`sudo -v` が成功すれば次へ進めます。[AlmaLinux の公式案内](https://wiki.almalinux.org/release-notes/10.3)
 - 動作確認に使った VM は 4 vCPU・メモリ 5 GiB・仮想ディスク 27 GiB です。実際のディスクは旧 DB・添付の複製、練習用と本番用のデータ、OS・ログの空き容量を見て選びます。負荷と添付容量はサイトによって変わります。
-- 旧サイトの **設置URLと版番号** を控えます。フォームが `https://www.example.jp/contact/recruit` なら設置URLは `https://www.example.jp/contact`、旧管理画面はその末尾に `/admin` を付けた場所です。管理トップにある **2.00.133／2.01.004** が取込対応版です。[ログインできない場合の版番号確認](EASYMAIL-VERSION.md)
+- 旧サイトの **設置URLと版番号** を控えます。フォームが `https://www.example.jp/contact/recruit` なら設置URLは `https://www.example.jp/contact`、旧管理画面はその末尾に `/admin` を付けた場所です。管理トップにある **2.00.124／2.00.125／2.00.133／2.01.004** が取込対応版です。[ログインできない場合の版番号確認](EASYMAIL-VERSION.md)
 
 ## 2. 練習用の管理画面を開く
 
@@ -19,6 +19,8 @@ sudo dnf install -y git iproute /usr/bin/flock
 git clone https://github.com/masaspc/MailForm.git
 sudo bash MailForm/deploy/almalinux10/setup.sh
 ```
+
+すでに `git clone` を終え、これから初回の設置を行う方は、取得したフォルダーの親で `git -C MailForm pull --ff-only origin main` を実行してから上の3行目へ進んでください。2.00.125・2.00.124 の旧サイトからも直接取り込めます。[この2版での移行](IMPORT.md#easymail-200125)
 
 聞かれるのは **旧設置URL、新しい管理者メールアドレス、パスワード（12文字以上、確認入力あり）** です。PHP・MariaDB・nginx、暗号鍵、非公開の添付領域、定期処理は自動で設定されます。「練習環境の準備ができました」と表示されたら、お手元の PC で次を実行します。接続先は普段の SSH と同じものに置き換えてください。
 

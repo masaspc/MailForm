@@ -6,7 +6,7 @@
 
 ブラウザーで **EasyMailの設置URLに `/admin` を付けて**開きます。ドメイン直下なら `https://www.example.jp/admin`、`/contact/` に設置した場合は `https://www.example.jp/contact/admin` です。公開フォームが `/contact/recruit` で `recruit` が個別フォーム名なら、管理入口は `/contact/admin` です。[公式サイトの管理画面URL案内](https://www.mubag.com/download/)
 
-公式配布版の2.00.133と2.01.004では、ログイン後の管理トップに製品名と版番号が並びます。2.01.004ではログイン画面の下部にも `version:` と番号が表示されます。画面が表示できない場合は、サーバーから取得した設置ファイルで確認できます。[2.00.133の公式配布物](https://www.mubag.com/download/2.00.133/EasyMail_2.00.133.zip)・[2.01.004の公式配布物](https://www.mubag.com/download/2.01.004/EasyMail_2.01.004.zip)
+取込対応の4版では、ログイン後の管理トップに製品名と版番号が並びます。2.01.004ではログイン画面の下部にも `version:` と番号が表示されます。画面が表示できない場合は、サーバーから取得した設置ファイルで確認できます。[2.00.124・2.00.125の配布物と照合一覧](IMPORT.md#easymail-200125)・[2.00.133の公式配布物](https://www.mubag.com/download/2.00.133/EasyMail_2.00.133.zip)・[2.01.004の公式配布物](https://www.mubag.com/download/2.01.004/EasyMail_2.01.004.zip)
 
 ## SSHまたはファイルのバックアップで調べる場合
 
@@ -23,6 +23,8 @@ done
 
 | 公式配布版 | 配布時のファイル | 記載例 |
 | --- | --- | --- |
+| 2.00.124 | `em_laravel/config/app.php` | `'version' => env( 'APP_VERSION', '2.00.124' ),` |
+| 2.00.125 | `em_laravel/config/app.php` | `'version' => env( 'APP_VERSION', '2.00.125' ),` |
 | 2.00.133 | `em_laravel/config/app.php` | `'version' => env( 'APP_VERSION', '2.00.133' ),` |
 | 2.01.004 | `config/app.php` | `'version' => env('APP_VERSION', '2.01.004'),` |
 
@@ -46,4 +48,4 @@ MailFormの設置と移行用のDB復元後、**新サーバーのMailFormディ
 php artisan easymail:import --dry-run --source-root=/backup/EasyMail --json
 ```
 
-出力の `version` がコードから読み取った版です。`forms` の `issues` と `warnings` に、標準ファイルとの差分、独自テーマ、入力条件などの確認事項が出ます。旧コードを実行せずに照合します。DBの列は両版で共通するため、DBだけでは版を断定できません。表示とファイルが食い違う、番号が対応版以外、版の記載が見つからない場合は、該当番号・ファイルの位置・バックアップの取得日を控え、実データを取り込む前に対応状況を確認してください。[DBと添付の移行手順](IMPORT.md)
+出力の `version` がコードから読み取った版です。`forms` の `issues` と `warnings` に、標準ファイルとの差分、独自テーマ、入力条件などの確認事項が出ます。旧コードを実行せずに照合します。複数の版で取込必須列が共通するため、DBだけでは版を断定できません。表示とファイルが食い違う、番号が対応版以外、版の記載が見つからない場合は、該当番号・ファイルの位置・バックアップの取得日を控え、実データを取り込む前に対応状況を確認してください。[DBと添付の移行手順](IMPORT.md)

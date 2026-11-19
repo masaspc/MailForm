@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Services\EasyMail\SourceRelease;
+
 final class PublicLocale
 {
     public static function activate(?string $locale): void
@@ -22,14 +24,28 @@ final class PublicLocale
         return app('translator')->hasForLocale($key, app()->getLocale()) ? __($key) : $label;
     }
 
-    public static function compoundLabels(array $fields): array
+    /** Old notifications always used the translated stock address title. */
+    public static function addressLabel(?string $sourceVersion, ?array $field = null): string
+    {
+        if (SourceRelease::usesUnsuffixedAddress($sourceVersion)) {
+            return self::label(['name' => 'zp_address', 'title' => '住所']);
+        }
+
+        return self::label($field ?? ['name' => 'zp_address', 'title' => '郵便番号付き住所']);
+    }
+
+    public static function compoundLabels(array $fields, ?string $sourceVersion = null): array
     {
         $labels = [];
         foreach ($fields as $field) {
             $name = $field['name'];
             $type = $field['form_type'];
-            if ($type === 'zp_address' || $type === 'first_last_name') {
-                $labels[$name] = [self::label(['name' => $type, 'title' => $type === 'zp_address' ? '郵便番号付き住所' : '氏名'])];
+            if ($type === 'zp_address') {
+                // Early histories stored the author's title for address blocks with a custom field name.
+                $labels[$name] = [SourceRelease::usesUnsuffixedAddress($sourceVersion) && $name !== 'zp_address'
+                    ? ($field['title'] ?? $name) : self::addressLabel($sourceVersion)];
+            } elseif ($type === 'first_last_name') {
+                $labels[$name] = [self::label(['name' => $type, 'title' => '氏名'])];
             } elseif ($type === 'name_and_furigana') {
                 $labels[$name] = [
                     self::label(['name' => 'name', 'title' => 'お名前']),

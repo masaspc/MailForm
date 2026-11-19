@@ -16,6 +16,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
+use PHPUnit\Framework\Attributes\TestWith;
 use Tests\TestCase;
 
 class EasyMailImportTest extends TestCase
@@ -219,7 +220,10 @@ class EasyMailImportTest extends TestCase
         $this->assertSame(0, Attachment::count());
     }
 
-    public function test_database_only_and_mismatched_backups_require_identification(): void
+    #[TestWith(['2.00.124'])]
+    #[TestWith(['2.00.125'])]
+    #[TestWith(['2.00.133'])]
+    public function test_database_only_and_mismatched_backups_require_identification(string $version): void
     {
         $this->assertSame(1, Artisan::call('easymail:import', ['--dry-run' => true]));
         $this->assertStringContainsString('--source-version', Artisan::output());
@@ -227,11 +231,20 @@ class EasyMailImportTest extends TestCase
         $root = $this->dir.'/em_laravel';
         mkdir($root.'/config', 0700, true);
         mkdir($root.'/resources/views/theme', 0700, true);
-        file_put_contents($root.'/config/app.php', "<?php return ['version' => env('APP_VERSION', '2.00.133')];");
-        $this->assertSame(1, Artisan::call('easymail:import', ['--source-root' => $this->dir, '--source-version' => '2.01.004']));
-        $this->assertSame(0, Artisan::call('easymail:import', ['--source-root' => $this->dir, '--dry-run' => true, '--json' => true]));
-        $this->assertSame('2.00.133', json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR)['version']);
+        file_put_contents($root.'/config/app.php', "<?php return ['version' => env( 'APP_VERSION', '$version' )];");
         $this->legacy->statement('CREATE TABLE migrations (migration TEXT)');
+        $this->legacy->table('migrations')->insert(['migration' => '2020_02_20_174440_create_forms_table']);
+        $this->legacy->statement('CREATE TABLE cache (key TEXT, value TEXT, expiration INTEGER)');
+        $this->assertSame(1, Artisan::call('easymail:import', ['--source-root' => $this->dir, '--source-version' => '2.01.004']));
+        $this->assertSame(1, Artisan::call('easymail:import', ['--source-version' => '2.01.004', '--dry-run' => true]));
+        $this->assertSame(0, Artisan::call('easymail:import', ['--source-root' => $this->dir, '--dry-run' => true, '--json' => true]));
+        $report = json_decode(Artisan::output(), true, flags: JSON_THROW_ON_ERROR);
+        $this->assertSame($version, $report['version']);
+        $this->assertSame([], $report['extra_tables']);
+        $this->assertFalse($report['forms'][0]['published']);
+        $this->assertStringContainsString('app/Library/Common.php', implode(' ', $report['forms'][0]['issues']));
+        $this->assertSame(2, Artisan::call('easymail:import', ['--source-root' => $this->dir, '--dry-run' => true, '--strict' => true]));
+        $this->assertSame($version, $this->runImport(['--dry-run' => true, '--source-version' => $version])['version']);
         $this->legacy->table('migrations')->insert(['migration' => '2022_12_14_071441_create_forms_table']);
         $this->assertSame(1, Artisan::call('easymail:import', ['--source-root' => $this->dir, '--dry-run' => true]));
         $this->assertDatabaseCount('forms', 0);

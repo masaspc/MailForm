@@ -30,7 +30,7 @@ class Importer
     {
         $this->source = DB::connection('legacy');
         $this->dryRun = $dryRun || $verifyOnly;
-        $this->verification = $verifyOnly ? new Reconciliation($this->source, $this->reader, $attachments) : null;
+        $this->verification = $verifyOnly ? new Reconciliation($this->source, $this->reader, $attachments, $release->version) : null;
         return $this->guard->run($this->source, DB::connection(), fn () => $this->process($release, $attachments, $formId));
     }
 
@@ -55,8 +55,9 @@ class Importer
                 throw new RuntimeException("旧DBの {$table} の構造が {$release->version} と一致しません。");
             }
         }
+        $uses200Schema = str_starts_with($release->version, '2.00.');
         if ($schema->hasColumns('migrations', ['migration'])) {
-            $other = $release->version === '2.00.133' ? '2022_12_14_071441_create_forms_table' : '2020_02_20_174440_create_forms_table';
+            $other = $uses200Schema ? '2022_12_14_071441_create_forms_table' : '2020_02_20_174440_create_forms_table';
             if ($this->source->table('migrations')->where('migration', $other)->exists()) {
                 throw new RuntimeException('旧DBのマイグレーション履歴と指定した配布版が一致しません。');
             }
@@ -64,7 +65,7 @@ class Importer
         $prefix = $this->source->getTablePrefix();
         $tables = array_map(fn ($t) => Str::after($t['name'], $prefix), $schema->getTables($schema->getCurrentSchemaName()));
         $stockTables = [...array_keys($required), 'html_blocks','migrations','users','sessions','failed_jobs','password_resets','personal_access_tokens','teams','team_user','team_invitations'];
-        if ($release->version === '2.00.133') {
+        if ($uses200Schema) {
             $stockTables[] = 'cache';
         }
         $plugins = $this->source->table('plugins')->orderBy('id')->get(['uid','name','version','active_flag'])->map(fn ($p) => (array) $p)->all();
@@ -150,7 +151,7 @@ class Importer
                 $fileIssues = array_merge($fileIssues, $themeIssues);
             }
             array_push($issues, ...$themeIssues);
-            $validationIssues = $this->audit->inspect($row, $fields, $warnings);
+            $validationIssues = $this->audit->inspect($row, $fields, $warnings, $this->version);
         }
 
         $urlProblem = PublicFormUrl::problem($slug);
@@ -399,8 +400,9 @@ class Importer
             }
             $row = $this->knownAttributes($row, HistoryReader::COLUMNS, 'histories', $warnings);
             [$historicalFields, $answers] = $this->reader->answers($row, $fields, $warnings);
+            $groups = $submission?->attachments()->orderBy('id')->get()->groupBy('name') ?? collect();
             $unsafe = 0;
-            $files = $this->reader->files($row, $this->attachmentDirectory, $warnings, $unsafe);
+            $files = $this->reader->files($row, $this->attachmentDirectory, $warnings, $unsafe, $this->version, $groups->keys()->all());
             $resolved = count(array_filter($files));
             if ($this->dryRun) {
                 return $resolved;
@@ -416,7 +418,6 @@ class Importer
                 $submission->save();
             }
             $key = $this->reader->attachmentKey($submission->snapshot['definition']['fields'], count($files));
-            $groups = $submission->attachments()->orderBy('id')->get()->groupBy('name');
             foreach ($files as $name => $path) {
                 if ($path === null) {
                     $groups->forget($name);

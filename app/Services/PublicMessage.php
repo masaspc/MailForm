@@ -4,12 +4,13 @@ namespace App\Services;
 
 use App\Models\Delivery;
 use App\Models\Submission;
+use App\Services\EasyMail\SourceRelease;
 use Illuminate\Http\Request;
 
 class PublicMessage
 {
     /** Use one timestamp for every template in this receipt. Replacements are not expanded again. */
-    public function tags(array $fields, array $answers, Request $request): array
+    public function tags(array $fields, array $answers, Request $request, ?string $sourceVersion = null, array $values = []): array
     {
         $at = now();
         $tags = [
@@ -22,11 +23,15 @@ class PublicMessage
         foreach (['YYYY' => 'Y', 'YY' => 'y', 'MM' => 'm', 'DD' => 'd', 'HH' => 'H', 'MI' => 'i', 'SS' => 's'] as $tag => $format) {
             $tags['#'.$tag.'#'] = $at->format($format);
         }
+        $bareAddress = SourceRelease::usesUnsuffixedAddress($sourceVersion);
         foreach ($fields as $field) {
             $key = $field['name'];
             $value = $answers[$key] ?? '';
             if ($field['form_type'] === 'name_and_furigana') {
                 $value = $value['name'];
+            } elseif ($field['form_type'] === 'zp_address' && $bareAddress) {
+                // These versions substituted the submitted field name, while the address used three separate names.
+                $value = empty($values[$key]) ? '' : $values[$key];
             }
             $tags['#'.$key.'#'] = is_array($value) ? implode(' ', $value) : (string) $value;
         }
@@ -51,7 +56,9 @@ class PublicMessage
             if (in_array($field['form_type'], ['radio', 'checkbox', 'multi_select'], true) && ($value === '' || $value === [])) {
                 continue;
             }
-            $title = e(PublicLocale::label($field));
+            $title = e($field['form_type'] === 'zp_address'
+                ? PublicLocale::addressLabel($definition['source_version'] ?? null, $field)
+                : PublicLocale::label($field));
             if ($field['form_type'] === 'name_and_furigana') {
                 $rows[] = $title.':'.$value['name'];
                 $rows[] = __((($field['restriction'] ?? '') === 'hiragana') ? 'ふりがな' : 'フリガナ').':'.$value['kana'];

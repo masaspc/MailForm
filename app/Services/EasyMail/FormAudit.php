@@ -18,7 +18,7 @@ class FormAudit
         'google_re_captcha_secret_key', 'google_re_captcha_bottom_px', 'beforeunload_flag', 'enter_forbidden_flag', 'submit_disabled_flag',
     ];
 
-    public function inspect(array $settings, array $fields, array &$warnings): array
+    public function inspect(array $settings, array $fields, array &$warnings, ?string $sourceVersion = null): array
     {
         $issues = [];
         foreach (array_diff(array_keys($settings), self::SETTINGS) as $key) {
@@ -123,7 +123,7 @@ class FormAudit
                 }
             }
             try {
-                foreach (app(PublicFields::class)->controls([$field]) as $key => $control) {
+                foreach (app(PublicFields::class)->controls([$field], $sourceVersion) as $key => $control) {
                     if (isset($controls[$key]) || isset($ids[$control['id']])) {
                         $issues[] = "入力欄の名前またはHTML IDが重複しています: {$key}";
                     }

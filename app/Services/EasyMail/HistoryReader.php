@@ -82,8 +82,20 @@ class HistoryReader
     }
 
     /** Keep missing but valid references so an incomplete snapshot cannot unlink an earlier copy. */
-    public function files(array $history, ?string $directory, array &$warnings, int &$unsafe = 0): array
+    public function files(array $history, ?string $directory, array &$warnings, int &$unsafe = 0, ?string $version = null, array $linkedNames = []): array
     {
+        $allowBareHashes = in_array($version, ['2.00.124', '2.00.125'], true);
+        $linked = array_fill_keys($linkedNames, true);
+        $known = static function (string $name) use ($linked, $directory): bool {
+            if (isset($linked[$name])) {
+                return true;
+            }
+            if ($directory === null || strlen($name) > 255) {
+                return false;
+            }
+            $path = $directory.'/'.$name;
+            return is_link($path) || is_file($path);
+        };
         $files = [];
         foreach (explode(',', (string) $history['attach_files']) as $fragment) {
             if ($fragment === '') {
@@ -94,7 +106,12 @@ class HistoryReader
                 $warnings[] = "履歴 #{$history['id']}: 安全なファイル名ではない添付参照を除外しました。";
                 continue;
             }
-            $parts = preg_split('/(?=[A-Za-z0-9]{40}\.)/', $fragment, flags: PREG_SPLIT_NO_EMPTY);
+            $parts = $this->fileNames($fragment, $allowBareHashes, $known);
+            if ($parts === null) {
+                $unsafe++;
+                $warnings[] = "履歴 #{$history['id']}: 連結された添付参照を一意に判別できません。複製のファイル名を確認してください。";
+                continue;
+            }
             foreach ($parts as $name) {
                 if (strlen($name) > 255 || preg_match('~[\\\\/\x00-\x1f\x7f]~', $name) || $name === '.' || $name === '..') {
                     $unsafe++;
@@ -111,6 +128,62 @@ class HistoryReader
             }
         }
         return $files;
+    }
+
+    private function fileNames(string $fragment, bool $allowBareHashes, callable $known): ?array
+    {
+        if (strlen($fragment) < 80) {
+            return [$fragment];
+        }
+        // Each 40-character hash immediately followed by a dot starts a new name.
+        $runs = preg_split('/(?=[A-Za-z0-9]{40}\.)/', $fragment, flags: PREG_SPLIT_NO_EMPTY);
+        if ($runs === false) {
+            return null;
+        }
+        if (!$allowBareHashes) {
+            return preg_match('/\A[A-Za-z0-9]{40}\./', $fragment)
+                ? $this->resolveLiteralName($fragment, $runs, $known) : [$fragment];
+        }
+        $names = [];
+        foreach ($runs as $run) {
+            if (preg_match('/\A[A-Za-z0-9]{40}\./', $run)) {
+                // In 2.00.124/125 the MIME extension, when present, is 1–24 bytes (including tar.gz).
+                // Removing whole 40-byte hashes from its right leaves the exact extension.
+                $length = (strlen($run) - 41) % 40;
+                $end = 41 + $length;
+                $suffix = substr($run, $end);
+                if ($suffix === '' || !preg_match('/\A[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,23}\z/', substr($run, 41, $length))
+                    || preg_match('/[^A-Za-z0-9]/', $suffix)) {
+                    $names[] = $run;
+                    continue;
+                }
+                $parts = [substr($run, 0, $end), ...str_split($suffix, 40)];
+            } elseif (strlen($run) % 40 === 0 && !preg_match('/[^A-Za-z0-9]/', $run)) {
+                $parts = str_split($run, 40);
+            } else {
+                return [$fragment];
+            }
+            $parts = $this->resolveLiteralName($run, $parts, $known);
+            if ($parts === null) {
+                return null;
+            }
+            array_push($names, ...$parts);
+        }
+        return count($runs) === 1 ? $names : $this->resolveLiteralName($fragment, $names, $known);
+    }
+
+    /** A literal custom filename or long original extension may also fit the hash format. */
+    private function resolveLiteralName(string $literal, array $parts, callable $known): ?array
+    {
+        if (count($parts) === 1 || !$known($literal)) {
+            return $parts;
+        }
+        foreach ($parts as $name) {
+            if ($known($name)) {
+                return null;
+            }
+        }
+        return [$literal];
     }
 
     public function attachmentKey(array $fields, int $referenceCount): string

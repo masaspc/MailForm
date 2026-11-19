@@ -4,7 +4,7 @@
 
 ## 旧版が使っていた入口
 
-公式 2.01.004 の `routes/web.php`、`IndexController::index`、管理画面の `resources/views/admin/form/list.blade.php` では、次のようにフォームを選びます。管理画面には旧 `APP_URL` と `forms.url` を結んだリンクが表示されます。[公式 2.01.004 配布物](https://www.mubag.com/download/2.01.004/EasyMail_2.01.004.zip)
+公式 2.01.004 の `routes/web.php`、`IndexController::index`、管理画面の `resources/views/admin/form/list.blade.php` では、次のようにフォームを選びます。管理画面には旧 `APP_URL` と `forms.url` を結んだリンクが表示されます。2.00.124・2.00.125 でも、ドメイン直下とフォーム名付きの入口は同じルーティングです。[2.00系の直接移行](IMPORT.md#easymail-200125)・[公式 2.01.004 配布物](https://www.mubag.com/download/2.01.004/EasyMail_2.01.004.zip)
 
 | 旧DBの `forms.url` | ブラウザーで開く入口の例 |
 | --- | --- |

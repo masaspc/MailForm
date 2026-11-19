@@ -1,0 +1,198 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Attachment;
+use App\Models\Form;
+use App\Models\Submission;
+use App\Services\PublicAccess;
+use App\Services\PublicFields;
+use App\Services\PublicMessage;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\MessageBag;
+use Illuminate\Support\Str;
+use RuntimeException;
+use Throwable;
+
+class PublicFormController extends Controller
+{
+    public function __construct(private PublicFields $fields, private PublicMessage $message) {}
+
+    private function published(Request $request, string $slug): Form
+    {
+        $form = Form::where('slug', $slug)->where('published', true)->whereNull('archived_at')->firstOrFail();
+        abort_if(!empty($form->definition['issues']), 404);
+        PublicAccess::enforce($request, $form->definition['settings'] ?? []);
+        return $form;
+    }
+
+    private function draft(Request $request, Form $form): array
+    {
+        $token = $request->input('receipt_token');
+        abort_unless(is_string($token) && Str::isUuid($token), 419);
+        $draft = $request->session()->get('public_drafts.'.$token);
+        abort_unless($draft && $draft['form'] === $form->id && $draft['expires'] > time(), 419);
+        abort_if(!isset($draft['completed']) && $draft['revision'] !== $form->revision, 409, 'フォームが更新されました。最初の画面から入力し直してください。');
+        return $draft;
+    }
+
+    private function persist(Request $request, array $draft): void
+    {
+        $request->session()->put('public_drafts.'.$draft['token'], $draft);
+    }
+
+    private function input(Form $form, array $draft, ?MessageBag $problems = null)
+    {
+        $controls = $this->fields->controls($form->definition['fields']);
+        return response()->view('public.input', [
+            'form' => $form, 'draft' => $draft, 'controls' => collect($controls)->groupBy('field'),
+            'problems' => $problems ?? new MessageBag(),
+        ], $problems ? 422 : 200)->header('Cache-Control', 'no-store');
+    }
+
+    public function show(Request $request, string $slug = '')
+    {
+        $form = $this->published($request, $slug);
+        $drafts = array_filter($request->session()->get('public_drafts', []), fn ($draft) => $draft['expires'] > time());
+        $request->session()->put('public_drafts', array_slice($drafts, -19, null, true));
+        $draft = ['token' => (string) Str::uuid(), 'form' => $form->id, 'revision' => $form->revision,
+            'expires' => time() + min(config('session.lifetime') * 60, 86400), 'values' => [], 'files' => [], 'confirmed' => false];
+        $this->persist($request, $draft);
+        return $this->input($form, $draft);
+    }
+
+    public function confirm(Request $request, string $slug = '')
+    {
+        $form = $this->published($request, $slug);
+        $draft = $this->draft($request, $form);
+        if (isset($draft['completed'])) {
+            return $this->redirectThanks($form);
+        }
+
+        $controls = $this->fields->controls($form->definition['fields']);
+        $disk = Storage::disk('local');
+        $previousPaths = array_column($draft['files'], 'path');
+        foreach (array_keys($draft['files']) as $key) {
+            if (in_array($key, (array) $request->input('remove_files', []), true)) {
+                unset($draft['files'][$key]);
+            }
+        }
+
+        [$values, $validator] = $this->fields->validate($request, $controls, $draft['files']);
+        $valid = $validator->passes();
+        $sizes = array_column($draft['files'], 'size', 'path');
+        foreach ($controls as $key => $control) {
+            if ($control['type'] === 'file' && $values[$key] && !$validator->errors()->has($key)) {
+                unset($sizes[$draft['files'][$key]['path'] ?? '']);
+                $sizes[$key] = $values[$key]->getSize();
+            }
+        }
+        abort_if(count($sizes) > PublicFields::MAX_FILES || array_sum($sizes) > PublicFields::TOTAL_FILE_BYTES, 413, '添付は合計20 MB、10件以内にしてください。');
+        $draft['confirmed'] = false;
+        foreach ($controls as $key => $control) {
+            if ($control['type'] === 'file') {
+                $file = $values[$key];
+                if ($file && !$validator->errors()->has($key)) {
+                    $path = $file->storeAs('form-drafts/'.$draft['token'], (string) Str::uuid(), 'local');
+                    throw_if(!$path, RuntimeException::class, '添付ファイルを保存できません。');
+                    $draft['files'][$key] = [
+                        'path' => $path, 'name' => mb_substr(preg_replace('/[[:cntrl:]]/u', '', $file->getClientOriginalName()), 0, 255),
+                        'mime' => $file->getMimeType() ?: 'application/octet-stream', 'size' => $file->getSize(),
+                    ];
+                }
+                unset($values[$key]);
+            } elseif (is_array($values[$key])) {
+                // Invalid nested values must never reach an HTML attribute or a session as an object.
+                $values[$key] = in_array($control['type'], ['checkbox', 'multi_select'], true)
+                    ? array_values(array_filter($values[$key], 'is_string')) : '';
+            }
+        }
+        $draft['values'] = $values;
+        $draft['confirmed'] = $valid;
+        $this->persist($request, $draft);
+        foreach (array_diff($previousPaths, array_column($draft['files'], 'path')) as $oldPath) {
+            $disk->delete($oldPath);
+        }
+        if (!$valid) {
+            return $this->input($form, $draft, $validator->errors());
+        }
+        $answers = $this->fields->answers($form->definition['fields'], $values, $draft['files']);
+        return response()->view('public.confirm', compact('form', 'draft', 'answers'))->header('Cache-Control', 'no-store');
+    }
+
+    public function back(Request $request, string $slug = '')
+    {
+        $form = $this->published($request, $slug);
+        $draft = $this->draft($request, $form);
+        if (isset($draft['completed'])) {
+            return $this->redirectThanks($form);
+        }
+        $draft['confirmed'] = false;
+        $this->persist($request, $draft);
+        return $this->input($form, $draft);
+    }
+
+    public function submit(Request $request, string $slug = '')
+    {
+        $form = $this->published($request, $slug);
+        $draft = $this->draft($request, $form);
+        if (isset($draft['completed'])) {
+            return $this->redirectThanks($form);
+        }
+        abort_unless($draft['confirmed'], 409, '入力内容を確認してから送信してください。');
+        app(\App\Services\SpamProtection::class)->verify($request, $form);
+        $definition = $form->definition;
+        $answers = $this->fields->answers($definition['fields'], $draft['values'], $draft['files']);
+        $tags = $this->message->tags($definition['fields'], $answers, $request);
+        $thanks = strtr($definition['settings']['thanks_message'] ?? '', $tags);
+        $disk = Storage::disk('local');
+        $copied = [];
+        try {
+            DB::transaction(function () use ($form, $draft, $definition, $answers, $tags, $disk, &$copied) {
+                $current = Form::lockForUpdate()->findOrFail($form->id);
+                abort_unless($current->published && !$current->archived_at && $current->revision === $draft['revision'], 409);
+                if (Submission::where('token', $draft['token'])->exists()) {
+                    return;
+                }
+                $submission = Submission::create(['form_id' => $form->id, 'token' => $draft['token'],
+                    'answers' => $answers, 'snapshot' => ['definition' => $definition, 'revision' => $form->revision,
+                        'retain' => !empty($definition['settings']['save_data'])]]);
+                $ids = [];
+                foreach ($draft['files'] as $key => $file) {
+                    $path = 'attachments/'.$draft['token'].'/'.Str::uuid();
+                    throw_unless($disk->copy($file['path'], $path), RuntimeException::class, '添付ファイルを保存できません。');
+                    $copied[] = $path;
+                    $attachment = Attachment::create(['submission_id' => $submission->id, 'field_key' => $key, 'path' => $path] + $file);
+                    $ids[] = $attachment->id;
+                }
+                $this->message->queue($submission, $definition, $answers, $tags, $ids);
+            });
+        } catch (Throwable $error) {
+            foreach ($copied as $path) {
+                $disk->delete($path);
+            }
+            throw $error;
+        }
+        $disk->deleteDirectory('form-drafts/'.$draft['token']);
+        unset($draft['values'], $draft['files']);
+        $draft['completed'] = true;
+        $this->persist($request, $draft);
+        $request->session()->put('public_thanks.'.$form->id, ['message' => $thanks, 'expires' => $draft['expires']]);
+        return $this->redirectThanks($form);
+    }
+
+    private function redirectThanks(Form $form)
+    {
+        return redirect()->route($form->slug === '' ? 'public.root.thanks' : 'public.thanks', $form->slug === '' ? [] : ['slug' => $form->slug], 303);
+    }
+
+    public function thanks(Request $request, string $slug = '')
+    {
+        $form = $this->published($request, $slug);
+        $receipt = $request->session()->get('public_thanks.'.$form->id);
+        abort_unless($receipt && $receipt['expires'] > time(), 404);
+        return response()->view('public.thanks', ['form' => $form, 'message' => $receipt['message']])->header('Cache-Control', 'no-store');
+    }
+}

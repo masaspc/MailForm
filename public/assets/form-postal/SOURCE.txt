@@ -1,0 +1,5 @@
+日本郵便株式会社「住所の郵便番号（1レコード1行、UTF-8形式）」2026年10月30日更新分を加工
+https://www.post.japanpost.jp/service/search/zipcode/download/utf-zip.html
+使用・再配布について
+https://www.post.japanpost.jp/service/search/zipcode/download/utf-readme.html
+全国の住所の郵便番号120,721件。事業所の個別番号は含みません。

@@ -2,6 +2,8 @@
 
 旧 EasyMail が稼働している間に、新しいサーバーを用意し、同じドメイン・同じパスで事前にアクセスできるところまで進めます。以下は nginx が HTTPS を終端し、同じホストの PHP-FPM と MariaDB を使う構成です。旧版の確定、最終バックアップ、受付停止、切替、切り戻しは[移行当日の手順](CUTOVER.md)に沿って実施します。
 
+旧サイトで最初に確認するのは管理画面の入口と版番号です。旧EasyMailが `/contact-form/` に設置されていれば入口は `/contact-form/admin` です。ログイン後、管理トップの製品名の横に版番号があります。開けない場合のSSH・SFTPでの確認方法も用意しています。[旧サーバーの版番号を調べる](EASYMAIL-VERSION.md)
+
 | 旧サイトの例 | nginx の組み込み先 | 新しい管理画面 |
 | --- | --- | --- |
 | `https://forms.example.jp/` をフォーム専用で運用 | そのホストの HTTPS `server` に `root-locations.conf` | `/admin` |
@@ -9,7 +11,7 @@
 
 ## 1. コンソールから起動を確認する
 
-VPS のコンソールまたは SSH で管理者として入り、`sudo -i` で root の Bash を開きます。インストール時に一般ユーザーへ管理権限を与えていない場合は、コンソールの root で `dnf install sudo openssh-server` を実行し、実在する管理者を `usermod -aG wheel 管理者名` で追加します。SSH 公開鍵を管理者に登録し、`systemctl enable --now sshd` の後、別の端末からログインと `sudo -v` を確認します。以下の OS 操作は root、アプリの実行は指定した専用ユーザーで行います。
+VPS のコンソールまたは SSH で管理者として入り、`sudo -i` で root の Bash を開きます。インストール時に一般ユーザーへ管理権限を与えていない場合は、コンソールの root で `dnf install sudo openssh-server` を実行します。一般アカウント自体がなければ `useradd -m 管理者名` と `passwd 管理者名` で作成し、そのアカウントを `usermod -aG wheel 管理者名` で追加します。SSH 公開鍵を管理者に登録し、`systemctl enable --now sshd` の後、別の端末からログインと `sudo -v` を確認します。以下の OS 操作は root、アプリの実行は指定した専用ユーザーで行います。
 
 ~~~bash
 cat /etc/almalinux-release
@@ -70,6 +72,8 @@ firewall-cmd --permanent --zone="$ZONE" --add-rich-rule="$rule"
 本番公開時は対象ゾーンと VPS 側の両方で 80/tcp・443/tcp を許可します。SSH の既存設定を保ち、外部から DB や FPM に接続するポートは開けません。公開時のコマンドは第 8 節にあります。[firewall-cmd の実行時・永続設定](https://firewalld.org/documentation/man-pages/firewall-cmd.html)
 
 ## 3. アカウント、非公開領域、DB を作る
+
+標準の 10.3 Minimal では SELinux は Enforcing です。第 1 節の確認で Permissive／Disabled だった環境は、管理コンソールからラベルと起動時設定を確認し、Enforcing に移行してから続けます。[SELinux の状態変更と再ラベル](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/10/html/using_selinux/changing-selinux-states-and-modes)
 
 ここからは新規の専用環境での初回操作です。`mailform-deploy` は Git・Composer とリリース配置、`mailform` は PHP-FPM・Artisan・定期実行、`nginx` は静的ファイルの配信を担当します。**移行先が 1 台の場合**は、そのマシンの `/srv/mailform` にまず検証用の DB・専用鍵・添付領域を用意します。旧サイトが受付中の間にリハーサルを終え、検証の受付とタイマーを停止して保全し、同じ移行先に本番用の空の DB、添付領域、専用鍵を用意して本取込を行います。具体的なディレクトリの入替は[切替手順](CUTOVER.md)にあります。検証機を別途用意できる場合も同じ構成を使えます。
 
@@ -210,6 +214,8 @@ MAIL_MAILER=array
 
 `SESSION_DOMAIN` は空のままでホスト限定にします。検証環境は独自の `APP_KEY`、`APP_ENV=staging`、検証用 `APP_URL`、`DB_DATABASE=mailform_stage`、`SESSION_COOKIE=mailform_stage_session` とします。検証環境に本番の SMTP 資格情報を置かず、通常は `MAILFORM_DELIVERY_ENABLED=false` です。承認された旧 DB の読み取り専用複製で移行を練習できます。試験受付には合成データを使います。送信経路の試験時だけ、転送機能のないループバック／閉域の SMTP 捕捉サーバーを指定し、送信待ちがテスト分だけであると確認して配信を有効にします。`array` で配信を有効にすると受信箱へ届く前にアプリの状態が送信済みになるため、配信確認には捕捉 SMTP を使います。
 
+SMTP 捕捉先を使う時は `MAIL_MAILER=smtp`、`MAIL_HOST=127.0.0.1`、`MAIL_PORT=捕捉先ポート` を指定します。既存設定を流用する場合、`MAIL_URL` は空にし、`MAIL_SCHEME` と認証を捕捉先の仕様に合わせます。`MAIL_URL` があると接続設定を上書きします。
+
 旧データ取込時に `LEGACY_DB_DRIVER=mariadb`、`LEGACY_DB_HOST=localhost`、`LEGACY_DB_SOCKET=/var/lib/mysql/mysql.sock`、`LEGACY_DB_DATABASE=mailform_legacy_snapshot`、`LEGACY_DB_USERNAME=mailform_legacy_ro`、`LEGACY_DB_PASSWORD=` を設定します。
 
 ~~~bash
@@ -301,6 +307,11 @@ install -m 0644 "$tpl"/mailform-schedule.{service,timer} /etc/systemd/system/
 restorecon /etc/systemd/system/mailform-schedule.{service,timer}
 systemctl daemon-reload
 systemd-analyze verify /etc/systemd/system/mailform-schedule.{service,timer}
+~~~
+
+次は**検証環境**で、配信を停止した状態の動作確認です。新本番の準備中はユニットの配置まで行い、最終取込と照合後に切替手順に沿ってそのタイマーを有効にします。
+
+~~~bash
 systemctl enable --now mailform-schedule.timer
 systemctl start mailform-schedule.service
 systemctl list-timers --all mailform-schedule.timer
@@ -351,7 +362,7 @@ while :; do
     case "$(systemctl show -p ActiveState --value mailform-schedule.service)" in inactive|failed) break ;; esac
     sleep 1
 done
-while pgrep -f '^php-fpm: pool mailform$' >/dev/null; do sleep 1; done
+while pgrep -f '^php-fpm: pool mailform([[:space:]]|$)' >/dev/null; do sleep 1; done
 mariadb-dump --single-transaction --quick --hex-blob --routines --events --triggers mailform | gzip > "$backup/db.sql.gz"
 tar -C /srv/mailform/shared -czf "$backup/shared.tar.gz" .env storage
 basename "$(readlink -f /srv/mailform/current)" > "$backup/revision"

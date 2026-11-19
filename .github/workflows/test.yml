@@ -35,6 +35,13 @@ jobs:
           extensions: pdo_mysql, pdo_sqlite, mbstring, dom, fileinfo
           tools: composer:v2
           coverage: none
+      - name: Check the AlmaLinux setup and backup import commands
+        if: matrix.php == '8.4' && matrix.database.image == 'mariadb:11.8'
+        run: |
+          shellcheck -x -P deploy/almalinux10 -s bash deploy/almalinux10/*.sh
+          php -l deploy/almalinux10/target.php
+          bash deploy/almalinux10/setup.sh --help
+          bash deploy/almalinux10/import-backup.sh --help
       - run: composer install --prefer-dist --no-progress --no-interaction
       - run: composer validate --strict && composer audit
       - run: cp .env.example .env && vendor/bin/phpunit

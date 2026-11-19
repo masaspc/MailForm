@@ -5,7 +5,7 @@ EasyMail 2.00.133・2.01.004のフォームを引き継いで、自分のサー�
 ## 旧EasyMailから移行する方へ
 
 1. **旧サイトの管理画面とバージョンを確認する。** 管理入口は「EasyMailの設置URL＋`/admin`」です。たとえば `/contact/` に設置し、申込フォームが `/contact/recruit` なら、管理入口は `/contact/admin` です。ログイン後、管理トップの製品名の横に版番号があります。旧PHPが動かないときは設置ファイルをテキストで確認できます。[旧サイトの確認手順](docs/EASYMAIL-VERSION.md)
-2. **新サーバーを準備する。** AlmaLinux 10.3 Minimalを用意してSSHで入れるところから、PHP-FPM、nginx、MariaDB、HTTPS、管理者、メール定期配信を設定します。[AlmaLinux 10.3 Minimalの公開手順](docs/ALMALINUX10.md)
+2. **新サーバーを1台用意する。** AlmaLinux 10.3 Minimal にSSHで入り、設置スクリプトを実行します。PHP・MariaDB・nginxが設定され、管理画面を手元のPCから開けます。[AlmaLinux 10.3 の簡単設置と移行](docs/ALMALINUX10.md)
 3. **現行URLで練習し、受付を引き継ぐ。** 旧版が実際の申込を受けている間に、別DBで取込・画面・メールを検証します。短い受付停止中に最終コピーを取り込み、受付件数・添付を照合してから同じURLの接続先を切り替えます。[並行稼働・切替・切り戻し](docs/CUTOVER.md)・[URLの照合](docs/URLS.md)・[DBと添付の取込](docs/IMPORT.md)
 
 ![3種類のフォームを管理する画面](docs/images/forms.png)

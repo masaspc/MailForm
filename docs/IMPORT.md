@@ -4,6 +4,52 @@
 
 設置版の番号は管理画面かバックアップで確認できます。[旧サーバーで版番号を調べる](EASYMAIL-VERSION.md)
 
+## 簡単設置で使うバックアップを用意する
+
+初回は旧サイトで受付を続けた状態のコピーを使います。切替当日は受付・編集と処理中の送信を止め、同じ手順で新しく `final` を作ります。以下は SSH で両サーバーを管理できる場合の例です。管理会社に依頼する場合も、単一 DB の SQL と、下記のファイルを同じ時点で取得してください。
+
+**旧サーバーで**、読み取り用のDBアカウントでダンプを取得します。`旧DB名`、`旧DBユーザー` と設置ディレクトリを実際の値に置き換えてください。古い MySQL では対応する `mysqldump` を使えます。SQL は対象DBのテーブルとデータだけを含む形式にします。DB選択・作成、トリガーやルーチンを含むダンプの場合は、元環境でエクスポートし直します。
+
+```bash
+umask 077
+copy="$HOME/mailform-first"
+mkdir -m 700 "$copy"
+mariadb-dump -u 旧DBユーザー -p --single-transaction --quick --hex-blob --skip-triggers 旧DB名 > "$copy/backup.sql"
+cd /旧EasyMailの設置ディレクトリ
+files=(config/app.php config/append.php app/Http/Controllers/IndexController.php app/Library/Common.php app/Mail/ContactMail.php routes/web.php resources/views/theme resources/lang)
+if test -d storage/app/attach_file; then files+=(storage/app/attach_file); fi
+tar -czf "$copy/EasyMail.tar.gz" -- "${files[@]}"
+```
+
+`config/app.php` が `em_laravel` の下にあれば、その内側で実行します。各コマンドの成功を確認し、2ファイルを SFTP または次の例で新サーバーの管理者へ転送します。
+
+```bash
+ssh 管理者@新サーバーのIP 'umask 077; mkdir "$HOME/mailform-first"'
+scp "$copy/backup.sql" "$copy/EasyMail.tar.gz" 管理者@新サーバーのIP:mailform-first/
+```
+
+**新サーバーで**、練習環境の設置後に実行します。展開は SSH で入った一般ユーザーが行います。専用の非公開領域には通常のファイルとディレクトリをコピーします。
+
+```bash
+cd ~/mailform-first
+mkdir -m 0700 EasyMail && tar --no-same-owner --no-same-permissions -xzf EasyMail.tar.gz -C EasyMail
+dest=/srv/mailform-import/first
+sudo dnf install -y rsync
+(
+  set -e
+  sudo install -d -o root -g mailform -m 0750 /srv/mailform-import
+  sudo mkdir -m 0700 "$dest"
+  sudo chgrp mailform "$dest" && sudo chmod 0750 "$dest"
+  sudo install -d -o root -g mailform -m 0750 "$dest/EasyMail"
+  sudo install -o root -g root -m 0600 backup.sql "$dest/backup.sql"
+  sudo rsync -rpog --chown=root:mailform --chmod=D750,F640 --exclude='.env*' EasyMail/ "$dest/EasyMail/"
+)
+```
+
+取り込む回ごとに空の保存先を使います。最終コピーはすべての `first` を `final` に替えます。新サーバーで `cd ~` して[簡単設置の取込手順](ALMALINUX10.md#3-旧データのコピーで練習する)へ戻ります。
+
+`import-backup.sh` は実行ごとに別名の複製DBを作り、読み取り専用アカウントで診断・取込・全件照合を行います。添付欠損や公開保留で停止した場合は、表示された警告を確認し、コピーの不足やフォームの差異を解消してください。複製DB名と管理者用の照合記録の場所は実行結果に表示されます。転送ファイルと複製DBの保持期限も、元のバックアップと合わせて管理してください。
+
 ## 準備
 
 1. 旧データベースのバックアップを専用の DB に復元し、対象テーブルを SELECT できる読み取り専用ユーザーを用意します。旧サイトの添付・テーマ・設置ファイルは公開ディレクトリの外に展開します。

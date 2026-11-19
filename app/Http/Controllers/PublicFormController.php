@@ -8,6 +8,7 @@ use App\Models\Submission;
 use App\Services\PublicAccess;
 use App\Services\PublicFields;
 use App\Services\PublicMessage;
+use App\Services\PublicLocale;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -24,6 +25,7 @@ class PublicFormController extends Controller
     {
         $form = Form::where('slug', $slug)->where('published', true)->whereNull('archived_at')->firstOrFail();
         abort_if(!empty($form->definition['issues']), 404);
+        PublicLocale::activate($form->definition['settings']['language'] ?? null);
         PublicAccess::enforce($request, $form->definition['settings'] ?? []);
         return $form;
     }
@@ -34,7 +36,7 @@ class PublicFormController extends Controller
         abort_unless(is_string($token) && Str::isUuid($token), 419);
         $draft = $request->session()->get('public_drafts.'.$token);
         abort_unless($draft && $draft['form'] === $form->id && $draft['expires'] > time(), 419);
-        abort_if(!isset($draft['completed']) && $draft['revision'] !== $form->revision, 409, 'フォームが更新されました。最初の画面から入力し直してください。');
+        abort_if(!isset($draft['completed']) && $draft['revision'] !== $form->revision, 409, __('フォームが更新されました。最初の画面から入力し直してください。'));
         return $draft;
     }
 
@@ -89,14 +91,14 @@ class PublicFormController extends Controller
                 $sizes[$key] = $values[$key]->getSize();
             }
         }
-        abort_if(count($sizes) > PublicFields::MAX_FILES || array_sum($sizes) > PublicFields::TOTAL_FILE_BYTES, 413, '添付は合計20 MB、10件以内にしてください。');
+        abort_if(count($sizes) > PublicFields::MAX_FILES || array_sum($sizes) > PublicFields::TOTAL_FILE_BYTES, 413, __('添付は合計20 MB、10件以内にしてください。'));
         $draft['confirmed'] = false;
         foreach ($controls as $key => $control) {
             if ($control['type'] === 'file') {
                 $file = $values[$key];
                 if ($file && !$validator->errors()->has($key)) {
                     $path = $file->storeAs('form-drafts/'.$draft['token'], (string) Str::uuid(), 'local');
-                    throw_if(!$path, RuntimeException::class, '添付ファイルを保存できません。');
+                    throw_if(!$path, RuntimeException::class, __('添付ファイルを保存できません。'));
                     $draft['files'][$key] = [
                         'path' => $path, 'name' => mb_substr(preg_replace('/[[:cntrl:]]/u', '', $file->getClientOriginalName()), 0, 255),
                         'mime' => $file->getMimeType() ?: 'application/octet-stream', 'size' => $file->getSize(),
@@ -141,7 +143,7 @@ class PublicFormController extends Controller
         if (isset($draft['completed'])) {
             return $this->redirectThanks($form);
         }
-        abort_unless($draft['confirmed'], 409, '入力内容を確認してから送信してください。');
+        abort_unless($draft['confirmed'], 409, __('入力内容を確認してから送信してください。'));
         app(\App\Services\SpamProtection::class)->verify($request, $form);
         $definition = $form->definition;
         $answers = $this->fields->answers($definition['fields'], $draft['values'], $draft['files']);
@@ -158,11 +160,12 @@ class PublicFormController extends Controller
                 }
                 $submission = Submission::create(['form_id' => $form->id, 'token' => $draft['token'],
                     'answers' => $answers, 'snapshot' => ['definition' => $definition, 'revision' => $form->revision,
+                        'compound_labels' => PublicLocale::compoundLabels($definition['fields']),
                         'retain' => !empty($definition['settings']['save_data'])]]);
                 $ids = [];
                 foreach ($draft['files'] as $key => $file) {
                     $path = 'attachments/'.$draft['token'].'/'.Str::uuid();
-                    throw_unless($disk->copy($file['path'], $path), RuntimeException::class, '添付ファイルを保存できません。');
+                    throw_unless($disk->copy($file['path'], $path), RuntimeException::class, __('添付ファイルを保存できません。'));
                     $copied[] = $path;
                     $attachment = Attachment::create(['submission_id' => $submission->id, 'field_key' => $key, 'path' => $path] + $file);
                     $ids[] = $attachment->id;

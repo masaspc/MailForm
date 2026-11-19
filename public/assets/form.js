@@ -2,6 +2,8 @@
 
 const entry = document.querySelector('form[data-entry]');
 if (entry) {
+    const messages = JSON.parse(entry.dataset.messages || '{}');
+    const tr = (text) => messages[text] || text;
     let dirty = false;
     entry.addEventListener('input', () => { dirty = true; });
     entry.addEventListener('submit', () => { dirty = false; });
@@ -26,11 +28,11 @@ if (entry) {
         const validate = () => {
             let error = '';
             if (target && input.value !== target.value) {
-                error = input.dataset.matchError || '再入力した内容が一致しません。';
+                error = input.dataset.matchError || tr('再入力した内容が一致しません。');
             } else if (input.value && pattern && !pattern.test(input.value)) {
-                error = input.dataset.formatError || '入力形式を確認してください。';
+                error = input.dataset.formatError || tr('入力形式を確認してください。');
             } else if (forbidden.some(word => input.value.includes(word))) {
-                error = '使用できない文字が含まれています。';
+                error = tr('使用できない文字が含まれています。');
             }
             input.setCustomValidity(error);
         };
@@ -89,7 +91,7 @@ if (entry) {
         const populate = (option) => {
             [prefecture.value, address.value] = option;
             dirty = true;
-            result.textContent = '住所をご確認のうえ、番地・建物名を入力してください。';
+            result.textContent = tr('住所をご確認のうえ、番地・建物名を入力してください。');
         };
         choices.addEventListener('change', () => {
             const option = options[choices.value];
@@ -99,13 +101,13 @@ if (entry) {
             const code = digits();
             choices.hidden = true;
             if (!/^[0-9]{7}$/.test(code)) {
-                result.textContent = '7桁の郵便番号を入力してください。';
+                result.textContent = tr('7桁の郵便番号を入力してください。');
                 return;
             }
             const initialAddress = address.value;
             const initialPrefecture = prefecture.value;
             button.disabled = true;
-            result.textContent = '検索しています…';
+            result.textContent = tr('検索しています…');
             try {
                 const response = await fetch(button.dataset.lookup + '/' + code[0] + '.json.gz', {
                     credentials: 'same-origin', referrerPolicy: 'no-referrer'
@@ -116,22 +118,22 @@ if (entry) {
                     ? await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).text()
                     : new TextDecoder().decode(bytes);
                 if (code !== digits() || address.value !== initialAddress || prefecture.value !== initialPrefecture) {
-                    result.textContent = '入力内容が変わりました。再度検索できます。';
+                    result.textContent = tr('入力内容が変わりました。再度検索できます。');
                     return;
                 }
                 options = JSON.parse(text)[code] || [];
                 if (!options.length) {
-                    result.textContent = '該当する住所がありません。手入力できます。';
+                    result.textContent = tr('該当する住所がありません。手入力できます。');
                 } else if (options.length === 1) {
                     populate(options[0]);
                 } else {
-                    choices.replaceChildren(new Option('住所を選択してください', ''));
+                    choices.replaceChildren(new Option(tr('住所を選択してください'), ''));
                     options.forEach(([pref, town], i) => choices.add(new Option(pref + town, String(i))));
                     choices.hidden = false;
-                    result.textContent = '該当する住所が複数あります。';
+                    result.textContent = tr('該当する住所が複数あります。');
                 }
             } catch {
-                result.textContent = '住所を検索できませんでした。手入力できます。';
+                result.textContent = tr('住所を検索できませんでした。手入力できます。');
             } finally {
                 button.disabled = false;
             }

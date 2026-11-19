@@ -100,6 +100,7 @@ class FormEditor
         $rules = [
             'name' => 'required|string|max:190',
             'slug' => 'nullable|string|max:190',
+            'language' => ['nullable', Rule::in(['ja','en','cn'])],
             'theme_name' => ['required', Rule::in(array_unique([...array_keys(ThemeCatalog::choices()), $base['settings']['theme_name'] ?? 'gray']))],
             'admin_email' => 'nullable|string|max:2000', 'cc_email' => 'nullable|string|max:2000', 'bcc_email' => 'nullable|string|max:2000',
             'mail_title' => 'nullable|string|max:255|not_regex:/[\r\n]/',
@@ -138,6 +139,7 @@ class FormEditor
 
         $settings = $base['settings'];
         $settings['name'] = $data['name'];
+        $settings['language'] = $data['language'] ?? ($settings['language'] ?? 'ja');
         $settings['url'] = $data['slug'] ?? '';
         $this->checkSlug($settings['url'], $form);
         foreach (['theme_name', 'admin_email', 'cc_email', 'bcc_email', 'mail_title', 'denied_ip', 'denied_ip_host_error_msg', ...array_keys(self::MESSAGES)] as $key) {

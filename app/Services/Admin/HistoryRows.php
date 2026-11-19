@@ -21,16 +21,17 @@ class HistoryRows
             $name = $field['name'] ?? 'legacy_field_'.$i;
             $title = $field['title'] ?? $name;
             $value = $answers[$name] ?? '';
+            $compound = $submission->snapshot['compound_labels'][$name] ?? [];
             if (! $imported && $type === 'name_and_furigana' && is_array($value)) {
-                $this->append($result, $occurrences, $name === 'name_and_furigana' ? 'お名前' : $title, $value['name'] ?? '');
-                $this->append($result, $occurrences, ($field['restriction'] ?? '') === 'hiragana' ? 'ふりがな' : 'フリガナ', $value['kana'] ?? '');
+                $this->append($result, $occurrences, $compound[0] ?? ($name === 'name_and_furigana' ? 'お名前' : $title), $value['name'] ?? '');
+                $this->append($result, $occurrences, $compound[1] ?? (($field['restriction'] ?? '') === 'hiragana' ? 'ふりがな' : 'フリガナ'), $value['kana'] ?? '');
                 continue;
             }
             if (! $imported && $type === 'zp_address') {
-                $title = '郵便番号付き住所';
+                $title = $compound[0] ?? '郵便番号付き住所';
                 $value = str_replace(["\r", "\n"], '', (string) $value);
             } elseif (! $imported && $name === 'first_last_name') {
-                $title = '氏名';
+                $title = $compound[0] ?? '氏名';
             }
             $this->append($result, $occurrences, $title, $this->format($value));
         }

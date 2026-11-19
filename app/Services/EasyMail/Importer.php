@@ -124,7 +124,7 @@ class Importer
             $issues[] = '旧フォーム定義が削除されています。履歴保管用フォームを作成します。';
         } else {
             $fields = $this->fields($id, $issues);
-            $themeIssues = $this->installation->forForm((string) $row['theme_name'], $slug);
+            $themeIssues = $this->installation->forForm((string) $row['theme_name'], $slug, ($row['language'] ?? '') ?: 'ja');
             if ($this->hasSourceFiles) {
                 $fileIssues = array_merge($fileIssues, $themeIssues);
             }
@@ -285,6 +285,12 @@ class Importer
     {
         $choices = $field['choices'];
         unset($field['created_at'], $field['updated_at'], $field['edit_flag'], $field['delete_flag'], $field['choices']);
+        // The 2.00 non-strict DB converted empty numeric limits to zero.
+        foreach (['min_length', 'max_length', 'columns', 'file_capacity_limit'] as $key) {
+            if (isset($field[$key]) && (int) $field[$key] === 0) {
+                unset($field[$key]);
+            }
+        }
         $definition = array_filter($field, fn ($v) => $v !== null && $v !== '');
         $definition['choices'] = [];
         foreach ($choices as $choice) {

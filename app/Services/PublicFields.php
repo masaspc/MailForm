@@ -44,6 +44,7 @@ class PublicFields
             abort_unless($restriction === '' || $restriction === 'email' || isset(self::PATTERNS[$restriction]), 404);
             abort_if($name === 'email' && !in_array($type, ['email', 'text'], true), 404);
             $field += ['title' => $name, 'html_id' => null, 'choices' => [], 'restriction' => '', 'required' => false];
+            $field['title'] = PublicLocale::label($field);
             $choiceType = $type === 'multi_select' ? 'select' : $type;
             $choices = [];
             foreach ($field['choices'] as $choice) {
@@ -74,6 +75,7 @@ class PublicFields
                 $control = $part + $base;
                 if (count($parts) > 1) {
                     $control['id'] = $control['key'];
+                    $control['label'] = __($control['label']);
                 }
                 $key = $control['key'];
                 abort_unless(preg_match('/^[a-zA-Z][a-zA-Z0-9_-]*$/D', $key) && ! isset($result[$key]) && !in_array($key, ['receipt_token', 'remove_files'], true), 404);
@@ -102,8 +104,8 @@ class PublicFields
                 if (is_string($part)) {
                     $bytes = strlen($part);
                     $totalBytes += $bytes;
-                    abort_if($bytes > 65536 || $totalBytes > 262144, 413, '入力内容が長すぎます。');
-                    abort_unless(mb_check_encoding($part, 'UTF-8'), 422, '入力内容の文字コードを確認してください。');
+                    abort_if($bytes > 65536 || $totalBytes > 262144, 413, __('入力内容が長すぎます。'));
+                    abort_unless(mb_check_encoding($part, 'UTF-8'), 422, __('入力内容の文字コードを確認してください。'));
                 }
             }
             if ($type === 'file') {
@@ -121,8 +123,8 @@ class PublicFields
             $values[$key] = $value;
             $labels[$key] = $c['label'];
             $rules[$key] = ['bail', $required ? 'required' : 'nullable'];
-            $messages[$key.'.required'] = ($field['required_error_msg'] ?? '') ?: $c['label'].'を入力してください。';
-            $formatMessage = ($field['restriction_error_msg'] ?? '') ?: $c['label'].'の入力形式を確認してください。';
+            $messages[$key.'.required'] = ($field['required_error_msg'] ?? '') ?: __(':attributeを入力してください。', ['attribute' => $c['label']]);
+            $formatMessage = ($field['restriction_error_msg'] ?? '') ?: __(':attributeの入力形式を確認してください。', ['attribute' => $c['label']]);
             foreach (['string', 'email', 'array', 'list', 'in', 'regex', 'date_format', 'url', 'file', 'uploaded'] as $rule) {
                 $messages[$key.'.'.$rule] = $formatMessage;
             }
@@ -131,10 +133,10 @@ class PublicFields
                 $configured = (int) ($field['file_capacity_limit'] ?? 0);
                 $limit = $configured > 0 ? min($configured, self::FILE_LIMIT_KB) : self::FILE_LIMIT_KB;
                 $rules[$key][] = 'max:'.$limit;
-                $messages[$key.'.max'] = 'ファイルは'.$limit.' KB以内にしてください。';
+                $messages[$key.'.max'] = __('ファイルは:limit KB以内にしてください。', ['limit' => $limit]);
                 $rules[$key][] = function ($attribute, $value, $fail) use ($field) {
                     if (!$this->allowedFile($value, $field['file_type'] ?? '')) {
-                        $fail('指定されたファイル形式を選択してください。');
+                        $fail(__('指定されたファイル形式を選択してください。'));
                     }
                 };
                 continue;
@@ -144,7 +146,7 @@ class PublicFields
                 $rules[$key][] = 'list';
                 $rules[$key][] = 'max:'.count($c['options']);
                 $rules[$key.'.*'] = ['bail', 'string', 'distinct:strict', Rule::in($c['options'])];
-                $messages[$key.'.*.*'] = '一覧から選んでください。';
+                $messages[$key.'.*.*'] = __('一覧から選んでください。');
                 continue;
             }
 
@@ -152,7 +154,7 @@ class PublicFields
             foreach (['min', 'max'] as $bound) {
                 if (($field[$bound.'_length'] ?? 0) > 0) {
                     $rules[$key][] = $bound.':'.(int) $field[$bound.'_length'];
-                    $messages[$key.'.'.$bound] = ($field['length_error_msg'] ?? '') ?: $c['label'].'の文字数を確認してください。';
+                    $messages[$key.'.'.$bound] = ($field['length_error_msg'] ?? '') ?: __(':attributeの文字数を確認してください。', ['attribute' => $c['label']]);
                 }
             }
             // A numeric rule would make Laravel measure min/max as numbers instead of characters.
@@ -180,7 +182,7 @@ class PublicFields
                 if ($word !== '') {
                     $rules[$key][] = function ($attribute, $value, $fail) use ($word) {
                         if (str_contains($value, $word)) {
-                            $fail('使用できない文字が含まれています。');
+                            $fail(__('使用できない文字が含まれています。'));
                         }
                     };
                 }
@@ -189,7 +191,7 @@ class PublicFields
                 $targetKey = $ids[ltrim($target, '#')] ?? null;
                 abort_if(!$targetKey, 404);
                 $rules[$key][] = 'same:'.$targetKey;
-                $messages[$key.'.same'] = ($field['re_enter_error_msg'] ?? '') ?: '再入力した内容が一致しません。';
+                $messages[$key.'.same'] = ($field['re_enter_error_msg'] ?? '') ?: __('再入力した内容が一致しません。');
                 if (!$required) {
                     $rules[$key][] = 'required_with:'.$targetKey;
                     $messages[$key.'.required_with'] = $messages[$key.'.same'];

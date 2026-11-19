@@ -126,6 +126,51 @@ class PublicFormTest extends TestCase
         $this->assertFalse(Submission::sole()->retain);
         $this->assertDatabaseCount('deliveries', 1);
     }
+    public function test_stock_contact_fixture_preserves_official_message_and_csv_bytes(): void
+    {
+        $this->travelTo(now()->setDate(2026, 11, 19)->setTime(12, 0));
+        $definition = \App\Services\FieldLibrary::presets()['contact'];
+        $form = Form::create(['slug' => 'contact', 'name' => 'お問い合わせ', 'published' => true, 'revision' => 1, 'definition' => $definition]);
+        $token = $this->token('/contact');
+        $this->post('/contact/confirm', [
+            'receipt_token' => $token, 'corporation_name' => '日本語の試験', 'staff_name' => '', 'email' => 'example@example.test', 'url' => '', 'tel' => '',
+            'zipzp_address' => '1000001', 'prefzp_address' => '東京都', 'addresszp_address' => '千代田区千代田', 'contents' => 'テストです。',
+        ])->assertOk();
+        $this->post('/contact/send', ['receipt_token' => $token])->assertRedirect();
+        $this->assertDatabaseCount('deliveries', 2);
+        // Digests of EasyMail 2.01.004 gray's rendered text templates and its csv.js download.
+        foreach (Delivery::all() as $delivery) {
+            $this->assertSame('99968a15ef8612f68ab5e2d54b0cc903b7564843e7c664c64d58cb4399fbf874', hash('sha256', $delivery->payload['body']));
+        }
+        $csv = app(\App\Http\Controllers\Admin\HistoryController::class)->csv($form, app(\App\Services\Admin\HistoryRows::class));
+        $bytes = \Illuminate\Testing\TestResponse::fromBaseResponse($csv)->streamedContent();
+        $this->assertSame('f48e1ecc5a6c72282906e752a761ec1d36f897954cb34f11c00f594b801f7d5d', hash('sha256', $bytes));
+    }
+
+    public function test_english_and_chinese_forms_localize_public_steps_errors_and_stock_field_names(): void
+    {
+        foreach ([
+            ['en', 'en', 'Review your answers', 'Please enter Name.', 'Submit', 'Submission complete'],
+            ['cn', 'zh-CN', '确认填写内容', '请填写姓名。', '提交', '提交成功'],
+        ] as [$locale, $lang, $review, $required, $send, $complete]) {
+            $form = $this->form($locale);
+            $def = $form->definition;
+            $def['settings']['language'] = $locale;
+            $def['fields'][] = ['name' => 'office', 'title' => '事業所', 'form_type' => 'zp_address'];
+            $def['settings']['thanks_message'] = 'Original custom message';
+            $form->update(['definition' => $def]);
+            $token = $this->token('/'.$locale);
+            $this->get('/'.$locale)->assertSee('lang="'.$lang.'"', false)->assertSee($review);
+            $this->post('/'.$locale.'/confirm', ['receipt_token' => $token])->assertUnprocessable()->assertSee($required);
+            $this->post('/'.$locale.'/confirm', $this->values($token))->assertOk()->assertSee($send);
+            $this->post('/'.$locale.'/send', ['receipt_token' => $token])->assertRedirect('/'.$locale.'/thanks');
+            $this->get('/'.$locale.'/thanks')->assertOk()->assertSee($complete)->assertSee('Original custom message');
+            $receipt = $form->submissions()->sole();
+            $exportLabels = array_column(app(\App\Services\Admin\HistoryRows::class)->cells($receipt), 'title');
+            $this->assertContains($locale === 'en' ? 'Address' : '地址', $exportLabels);
+        }
+    }
+
     public function test_hostname_rules_use_server_identity_and_deny_when_identity_is_unavailable(): void
     {
         $form = $this->form();

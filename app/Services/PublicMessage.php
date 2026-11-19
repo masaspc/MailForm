@@ -51,10 +51,10 @@ class PublicMessage
             if (in_array($field['form_type'], ['radio', 'checkbox', 'multi_select'], true) && ($value === '' || $value === [])) {
                 continue;
             }
-            $title = e($field['title'] ?? $key);
+            $title = e(PublicLocale::label($field));
             if ($field['form_type'] === 'name_and_furigana') {
                 $rows[] = $title.':'.$value['name'];
-                $rows[] = (($field['restriction'] ?? '') === 'hiragana' ? 'ふりがな' : 'フリガナ').':'.$value['kana'];
+                $rows[] = __((($field['restriction'] ?? '') === 'hiragana') ? 'ふりがな' : 'フリガナ').':'.$value['kana'];
             } elseif ($field['form_type'] === 'zp_address') {
                 $rows[] = $title.":\n".$value;
             } else {

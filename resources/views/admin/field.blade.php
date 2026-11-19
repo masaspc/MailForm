@@ -5,11 +5,11 @@
 @endphp
 <article class="field" data-field>
     <input type="hidden" name="{{ $key }}[id]" value="{{ $field['id'] ?? '' }}">
-    <div class="field-bar"><strong class="field-no">入力項目</strong><div class="actions">
+    <div class="field-bar"><strong class="field-no">入力項目</strong>@unless(request()->routeIs('admin.fields','admin.fields.edit'))<div class="actions">
         <button class="tiny" type="button" data-move="up" aria-label="項目を上へ移動">↑</button>
         <button class="tiny" type="button" data-move="down" aria-label="項目を下へ移動">↓</button>
         <button class="plain danger" type="button" data-remove>削除</button>
-    </div></div>
+    </div>@endunless</div>
     <div class="field-grid">
         <label>項目名<input name="{{ $key }}[title]" value="{{ $field['title'] ?? '' }}" required maxlength="255"></label>
         <label>入力形式<select name="{{ $key }}[form_type]" data-type>

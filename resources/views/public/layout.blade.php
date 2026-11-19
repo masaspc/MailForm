@@ -3,7 +3,7 @@
     $theme = \App\Models\Theme::where('slug', $themeName)->first();
 @endphp
 <!doctype html>
-<html lang="ja">
+<html lang="{{ app()->getLocale() === 'cn' ? 'zh-CN' : app()->getLocale() }}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -16,9 +16,9 @@
 <div class="site-banner">{{ \App\Services\SafeMarkup::render($theme?->header ?: config('app.name', 'MailForm')) }}</div>
 <main>
 <header><h1>{{ $form->name }}</h1></header>
-<ol class="steps" aria-label="受付手順">
+<ol class="steps" aria-label="{{ __('受付手順') }}">
 @foreach(['input' => '入力', 'confirm' => '確認', 'thanks' => '完了'] as $key => $label)
-<li @if($stage === $key) aria-current="step" @endif><span aria-hidden="true">{{ $loop->iteration }}</span>{{ $label }}</li>
+<li @if($stage === $key) aria-current="step" @endif><span aria-hidden="true">{{ $loop->iteration }}</span>{{ __($label) }}</li>
 @endforeach
 </ol>
 @yield('content')

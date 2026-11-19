@@ -26,6 +26,9 @@
             @if(!isset($themes[$theme]))<option value="{{ $theme }}">{{ $theme }}（移行テーマ）</option>@endif
             @foreach( $themes as $key => $label)<option value="{{ $key }}" @selected($key === $theme)>{{ $label }}</option>@endforeach
         </select></label>
+        <label>公開フォームの表示言語<select name="language">
+            @foreach(['ja'=>'日本語','en'=>'English','cn'=>'中文'] as $key => $label)<option value="{{ $key }}" @selected(old('language', $settings['language'] ?? 'ja') === $key)>{{ $label }}</option>@endforeach
+        </select></label>
     </div>
     <label class="check"><input type="checkbox" name="save_data" value="1" @checked(old('editor_complete') ? old('save_data') : ($settings['save_data'] ?? 1))>回答を受信履歴に保存する</label>
     <details class="details"><summary>受付と操作の設定</summary><div class="stack">

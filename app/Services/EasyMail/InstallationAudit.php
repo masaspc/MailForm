@@ -27,10 +27,10 @@ class InstallationAudit
         if ($this->root === null) {
             return [];
         }
-        return $this->coreIssues ??= $this->differences(array_filter($this->manifest, fn ($path) => !str_starts_with($path, 'resources/views/theme/'), ARRAY_FILTER_USE_KEY));
+        return $this->coreIssues ??= $this->differences(array_filter($this->manifest, fn ($path) => !str_starts_with($path, 'resources/'), ARRAY_FILTER_USE_KEY));
     }
 
-    public function forForm(string $theme, string $slug): array
+    public function forForm(string $theme, string $slug, string $language): array
     {
         if (!in_array($theme, ['gray', 'gradation', 'one_column', 'two_column01', 'two_column02'], true)) {
             return ["未対応のテーマ: {$theme}"];
@@ -56,6 +56,10 @@ class InstallationAudit
         }
 
         $issues = $this->themeIssues[$theme];
+        if (in_array($language, ['ja', 'en', 'cn'], true)) {
+            $prefix = "resources/lang/{$language}/";
+            array_push($issues, ...$this->differences(array_filter($this->manifest, fn ($path) => str_starts_with($path, $prefix), ARRAY_FILTER_USE_KEY)));
+        }
         if (preg_match('/^[\pL\pN_-]*$/uD', $slug)) {
             $override = 'resources/views/theme/'.($slug === '' ? 'index' : $slug).'.blade.php';
             if (is_file($this->root.'/'.$override)) {

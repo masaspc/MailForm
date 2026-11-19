@@ -29,8 +29,8 @@ class FormAudit
         if ((!empty($settings['google_re_captcha_secret_key']) || !empty($settings['google_re_captcha_site_key'])) && !SpamProtection::configured()) {
             $issues[] = 'reCAPTCHA の新しいサイトキー・シークレットを設定してください。';
         }
-        if (!in_array($settings['language'] ?? '', ['', 'ja'], true)) {
-            $issues[] = '日本語以外の表示言語が指定されています。';
+        if (!in_array($settings['language'] ?? '', ['', 'ja', 'en', 'cn'], true)) {
+            $issues[] = '未対応の表示言語です。対応言語は日本語・英語・中国語です。';
         }
         foreach (preg_split('/\R/u', (string) ($settings['denied_ip'] ?? ''), flags: PREG_SPLIT_NO_EMPTY) as $rule) {
             $rule = trim($rule);

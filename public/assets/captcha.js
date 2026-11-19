@@ -10,13 +10,13 @@ if (tokenInput) {
         event.stopImmediatePropagation();
         if (checking) return;
         checking = true;
-        notice.textContent = '送信を確認しています…';
+        notice.textContent = notice.dataset.wait;
         try {
             await new Promise(resolve => grecaptcha.ready(resolve));
             tokenInput.value = await grecaptcha.execute(tokenInput.dataset.sitekey, { action: 'easy_mail_send' });
             HTMLFormElement.prototype.submit.call(form);
         } catch {
-            notice.textContent = '送信を確認できません。もう一度お試しください。';
+            notice.textContent = notice.dataset.error;
             checking = false;
         }
     }, true);

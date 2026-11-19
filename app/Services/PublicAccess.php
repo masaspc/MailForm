@@ -34,7 +34,7 @@ class PublicAccess
     public static function enforce(Request $request, array $settings): void
     {
         $address = (string) $request->ip();
-        $message = ($settings['denied_ip_host_error_msg'] ?? '') ?: 'このフォームは利用できません。';
+        $message = ($settings['denied_ip_host_error_msg'] ?? '') ?: __('このフォームは利用できません。');
         foreach (preg_split('/\R/u', $settings['denied_ip'] ?? '', flags: PREG_SPLIT_NO_EMPTY) as $rule) {
             $rule = trim($rule);
             if ($rule === '') {

@@ -383,6 +383,8 @@ basename "$(readlink -f /srv/mailform/current)" > "$backup/revision"
 
 ## この手順で確認した環境
 
+[簡単設置](ALMALINUX10.md)についても、公式 AlmaLinux 10.3 GenericCloud aarch64 の新規 VM で確認しました。EasyMail 2.01.004 の標準設置ファイルと模擬データを使い、SSH 経由の管理ログイン、初回取込、別の本番 DB への最終取込（旧履歴2件・添付2件が一致）、元の HTTPS URL での新規受付1件、閉域の SMTP で管理者通知・自動返信の計2通を確認しています。公開前にアプリの暗号鍵を変更した場合と SMTP に接続できない場合は、受付停止が維持されました。
+
 2026-11-19 に公式 AlmaLinux 10.3 の aarch64 `Minimal Install` グループ（基礎環境 314 RPM）から、上記パッケージの導入、PHP 拡張、固定依存関係のプラットフォーム検査を確認しました。サービスの起動と HTTP の試験には、別の公式 AlmaLinux 10.3 GenericCloud aarch64 仮想マシンを使いました。PHP/FPM 8.4.27、nginx 1.26.3、MariaDB 11.8.8、Composer 2.11.2、SELinux Enforcing、firewalld 有効で、ドメイン直下と既存サイトのサブディレクトリの両構成を確認しています。
 
 仮想マシンでは、検証用証明書での HTTPS、サブディレクトリ外の既存ページ、`index.php` 付き URL、日本語・空白入り URL、CSS・JS・郵便番号データ、フォームの受付から完了、非公開ファイルの HTTP 404、systemd の毎分実行、配信停止と再開、ループバックの SMTP 捕捉先への到着を確認しました。利用者の VPS、公的証明書の発行、公開 DNS、契約 SMTP、実際の旧データの一致は設置先の確認項目です。

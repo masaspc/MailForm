@@ -21,11 +21,11 @@ if test -d storage/app/attach_file; then files+=(storage/app/attach_file); fi
 tar -czf "$copy/EasyMail.tar.gz" -- "${files[@]}"
 ```
 
-`config/app.php` が `em_laravel` の下にあれば、その内側で実行します。各コマンドの成功を確認し、2ファイルを SFTP または次の例で新サーバーの管理者へ転送します。
+`config/app.php` が `em_laravel` の下にあれば、その内側で実行します。各コマンドの成功を確認し、**手元の PC で**次を実行します。`scp -3` は両方のサーバーに手元の SSH 鍵で接続し、2ファイルを PC 経由で転送します。SFTP クライアントでの転送も可能です。
 
 ```bash
 ssh 管理者@新サーバーのIP 'umask 077; mkdir "$HOME/mailform-first"'
-scp "$copy/backup.sql" "$copy/EasyMail.tar.gz" 管理者@新サーバーのIP:mailform-first/
+scp -3 旧SSHユーザー@旧サーバー:mailform-first/backup.sql 旧SSHユーザー@旧サーバー:mailform-first/EasyMail.tar.gz 管理者@新サーバーのIP:mailform-first/
 ```
 
 **新サーバーで**、練習環境の設置後に実行します。展開は SSH で入った一般ユーザーが行います。専用の非公開領域には通常のファイルとディレクトリをコピーします。

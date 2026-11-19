@@ -2,6 +2,8 @@
 
 **これから用意するのは新サーバー1台です。** 最初は旧サイトで受付を続けながら、新サーバーの管理画面に自分だけがログインして練習します。
 
+チャットで一手ずつ案内を受けたい方は、[新しい ChatGPT に貼る引継ぎ文](CHATGPT-SUPPORT.md)を使えます。
+
 ## 1. 新サーバーを用意する
 
 - VPS や仮想マシンで **AlmaLinux 10.3 Minimal** を選び、管理者の SSH 公開鍵を登録します。練習中の受信許可は管理元からの SSH だけで足ります。SSH で入り、`cat /etc/almalinux-release` が 10.3、`sudo -v` が成功すれば次へ進めます。[AlmaLinux の公式案内](https://wiki.almalinux.org/release-notes/10.3)

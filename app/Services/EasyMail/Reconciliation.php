@@ -64,7 +64,12 @@ final class Reconciliation
         $others = Form::whereIntegerNotInRaw('id', $checked)->when($scopedId !== null, fn ($q) => $q->where('legacy_id', $scopedId))
             ->lazyById(100);
         foreach ($others as $form) {
-            $state = $form->legacy_id === null ? 'new_only' : ($form->published ? 'still_published' : 'withdrawn');
+            $state = match (true) {
+                $form->legacy_id === null => 'new_only',
+                $form->published => 'still_published',
+                $form->awaiting_theme_publication => 'awaiting_theme_publication',
+                default => 'withdrawn',
+            };
             $this->check($form->legacy_id, $form, $state);
         }
         return ['ok' => !in_array(false, array_column($this->forms, 'ok'), true), 'forms' => $this->forms];

@@ -31,4 +31,22 @@ class ThemeCatalog
         sort($others, SORT_STRING);
         return [...$ordered, ...$others];
     }
+
+    /** Apply the administrator's logo choice inside the original responsive link. */
+    public static function logoOverride(Theme $theme, string $stylesheet): string
+    {
+        $original = $theme->import_report['background_logo'] ?? null;
+        if ($original === null || $theme->logo === $original || !SafeMarkup::hasLinkedLogo($theme->header)) {
+            return '';
+        }
+        $sheets = self::stylesheets($theme);
+        if (end($sheets) !== $stylesheet) {
+            return '';
+        }
+        $selected = $theme->logo;
+        $declaration = $selected !== null && isset(self::files($theme, 'image/')[$selected])
+            ? 'background-image:url("'.ThemeAssets::url($theme->slug, $selected).'") !important;'
+            : 'background-image:none !important; text-indent:0 !important;';
+        return "\n.site-banner .".SafeMarkup::LINKED_LOGO_CLASS.' a { '.$declaration.' }';
+    }
 }

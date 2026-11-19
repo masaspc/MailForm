@@ -82,17 +82,13 @@ class ImportedThemeAssetsTest extends TestCase
         $this->assertStringNotContainsString('?v=', $asset['bytes']);
     }
 
-    public function test_svg_logo_keeps_its_local_artwork_when_active_parts_are_removed(): void
+    public function test_svg_logo_with_active_parts_is_rejected_even_when_it_contains_local_artwork(): void
     {
         $svg = '<svg xmlns="http://www.w3.org/2000/svg" onload="unused"><script>legacy sample</script>'
             .'<image href="https://example.invalid/old.png"/><path d="M0 0 L2 2 Z" fill="blue"/></svg>';
         $warnings = [];
         $asset = ThemeAssets::prepare('images/logo.svg', $svg, [], $warnings);
-        $this->assertNotNull($asset);
-        $this->assertStringContainsString('fill="blue"', $asset['bytes']);
-        foreach (['script', 'onload', 'example.invalid', 'legacy sample'] as $removed) {
-            $this->assertStringNotContainsString($removed, $asset['bytes']);
-        }
+        $this->assertNull($asset);
         $this->assertStringContainsString('images/logo.svg:1', implode(' ', $warnings));
     }
 

@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Services\EasyMail\Importer;
+use App\Services\EasyMail\IntegrityException;
 use App\Services\EasyMail\SourceRelease;
 use App\Services\PublicFormUrl;
 use Illuminate\Console\Command;
@@ -22,7 +23,7 @@ class ImportEasyMail extends Command
         {--form= : 旧フォームIDを指定}
         {--json : 診断結果をJSONで出力}
         {--overwrite-themes : 管理画面でのテーマの手直しをバックアップの内容で上書きする}
-        {--strict : 移行を妨げる問題・照合警告で終了コード2。独自テーマの目視照合待ちのみなら継続}';
+        {--strict : DB構造・公開パスの競合・添付欠損などの整合性エラーで終了コード2。フォーム単位の公開保留は継続}';
 
     protected $description = 'EasyMail の複製DBからフォーム・受信履歴・添付を移行する';
 
@@ -61,6 +62,13 @@ class ImportEasyMail extends Command
                     ];
                 }
             }
+        } catch (IntegrityException $e) {
+            if ($this->option('json')) {
+                $this->writeJson(['integrity_errors' => [$e->getMessage()], 'forms' => []]);
+            } else {
+                $this->error($this->printable($e->getMessage()));
+            }
+            return $this->option('strict') || $this->option('verify-only') ? self::INVALID : self::FAILURE;
         } catch (QueryException) {
             $this->error('DBを読み書きできません。接続先、権限、移行先のマイグレーションを確認してください。');
             return self::FAILURE;
@@ -69,17 +77,16 @@ class ImportEasyMail extends Command
             return self::FAILURE;
         }
 
-        $review = (bool) $report['warnings'];
-        foreach ($report['forms'] as $form) {
-            $review = $review || $form['issues'] || $form['warnings'];
-        }
         if ($this->option('json')) {
-            $this->output->writeln(json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR), $this->output::OUTPUT_RAW);
+            $this->writeJson($report);
         } else {
             $this->info($report['verify_only'] ? '移行済みデータの照合' : ($report['dry_run'] ? '移行診断（書き込みなし）' : '移行結果'));
             $this->line(sprintf('共通項目　独自・変更済み %d・標準と一致 %d', $report['library']['custom'], $report['library']['stock']));
             foreach ($report['warnings'] as $warning) {
                 $this->warn($this->printable($warning));
+            }
+            foreach ($report['integrity_errors'] as $error) {
+                $this->error('整合性エラー　'.$this->printable($error));
             }
             if ($report['extra_tables']) {
                 $this->line('標準外のテーブル '. $this->printable(implode(', ', $report['extra_tables'])));
@@ -94,7 +101,7 @@ class ImportEasyMail extends Command
                         $this->line('  '.$label.' '.$this->printable($path));
                     }
                 }
-                foreach ([...$theme['behaviors'], ...$theme['warnings'], ...$theme['errors'], ...$theme['integrity']] as $notice) {
+                foreach (array_unique([...$theme['behaviors'], ...$theme['warnings'], ...$theme['errors'], ...$theme['integrity']]) as $notice) {
                     $this->warn('  '.$this->printable($notice));
                 }
             }
@@ -107,8 +114,11 @@ class ImportEasyMail extends Command
                 if ($sourceBase !== null) {
                     $this->line('  旧 '.$this->printable($form['source_entry_url'] ?? '公開入口なし').' → 新 '.$this->printable($form['target_entry_url'] ?? '公開入口なし'));
                 }
-                foreach (array_merge($form['issues'], $form['warnings'], $form['notices']) as $issue) {
+                foreach (array_diff([...$form['issues'], ...$form['warnings'], ...$form['notices']], $form['integrity_errors']) as $issue) {
                     $this->warn('  '.$this->printable($issue));
+                }
+                foreach (array_diff($form['integrity_errors'], $report['integrity_errors']) as $error) {
+                    $this->error('  整合性エラー　'.$this->printable($error));
                 }
             }
             foreach ($report['reconciliation']['forms'] ?? [] as $check) {
@@ -122,7 +132,13 @@ class ImportEasyMail extends Command
                 }
             }
         }
-        return ($report['reconciliation']['ok'] ?? true) && !($review && $this->option('strict')) ? self::SUCCESS : self::INVALID;
+        $integrityFailed = $report['integrity_errors'] || array_filter(array_column($report['forms'], 'integrity_errors'));
+        return ($report['reconciliation']['ok'] ?? true) && !($integrityFailed && $this->option('strict')) ? self::SUCCESS : self::INVALID;
+    }
+
+    private function writeJson(array $report): void
+    {
+        $this->output->writeln(json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR), $this->output::OUTPUT_RAW);
     }
 
     private function baseUrl(string $url, string $setting): string

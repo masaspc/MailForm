@@ -12,7 +12,7 @@ setup.sh で準備した新サーバーで、旧サイトの単一DBのSQLと同
 コピーするファイル、所有者、権限は docs/IMPORT.md を確認してください。
 HELP
 }
-die() { printf '%s\n' "$*" >&2; exit 1; }
+die() { printf '%s\n' "$1" >&2; exit "${2:-1}"; }
 
 if [[ $# == 1 && ( $1 == --help || $1 == -h ) ]]; then usage; exit 0; fi
 theme_options=()
@@ -119,10 +119,10 @@ if ! runuser -u "$writer" -- env -i PATH="$PATH" HOME=/nonexistent LC_ALL=C \
     mariadb --no-defaults --protocol=socket --socket="$socket" --user="$writer" --database="$schema" \
     --batch --binary-mode --sandbox --local-infile=0 --skip-reconnect --show-warnings \
     < "$dump" > "$record/restore.log" 2>&1; then
-    die "SQLの復元を停止しました。単一DBのエクスポートと管理者用の記録 $record/restore.log を確認してください。"
+    die "SQLの復元を停止しました。単一DBのエクスポートと管理者用の記録 $record/restore.log を確認してください。" 2
 fi
 if ! LC_ALL=C awk -f "$helper_dir/restore-warnings.awk" "$record/restore.log"; then
-    die "SQL復元時に警告がありました。管理者用の記録 $record/restore.log を確認してください。"
+    die "SQL復元時に警告がありました。管理者用の記録 $record/restore.log を確認してください。" 2
 fi
 release_writer
 "${admin[@]}" -e "CREATE USER '$reader'@'localhost' IDENTIFIED VIA unix_socket AS 'mailform'"
@@ -148,20 +148,34 @@ foreach ($r["reconciliation"]["forms"] as $f) {
         $f["source"]["missing"], $f["files"]["verified"], $f["files"]["expected"]);
 }
 $waiting = false;
+$held = $heldPublic = 0;
 foreach ($r["forms"] as $f) {
-    if ($argv[1] === "production-ready" && $f["source_published"] && $f["same_public_url"] !== true) {
-        if ($f["theme_review"] === "pending" && !$f["issues"] && $f["source_entry_url"] === $f["planned_entry_url"]) {
+    $draft = !$f["published"] && $f["current_public_path"] === null;
+    $formHold = $draft && ($f["issues"] || $f["warnings"]);
+    if ($formHold) {
+        $held++;
+        $heldPublic += (int) $f["source_published"];
+    }
+    if ($argv[1] !== "production-ready" || !$f["source_published"] || $f["same_public_url"] === true) {
+        continue;
+    }
+    if ($draft && !$f["integrity_errors"] && $f["source_entry_url"] !== null && $f["source_entry_url"] === $f["planned_entry_url"]) {
+        if ($formHold || $f["archived"]) {
+            continue;
+        }
+        if ($f["awaiting_theme_publication"]) {
             printf("旧フォーム #%d はテーマ照合待ちです。\n", $f["legacy_id"]);
             $waiting = true;
             continue;
         }
-        fprintf(STDERR, "旧フォーム #%d の公開URLが一致しません。\n", $f["legacy_id"]); exit(2);
     }
+    fprintf(STDERR, "旧フォーム #%d の公開URLが一致しません。\n", $f["legacy_id"]); exit(2);
 }
+printf("フォーム別の確認事項で下書き %d 件（うち旧サイトで公開 %d 件）。各フォームの理由は verify.json を確認してください。\n", $held, $heldPublic);
 exit(($r["reconciliation"]["ok"] ?? false) === true ? ($waiting ? 3 : 0) : 2);
 ' "$phase" < "$record/verify.json" || review_status=$?
-(( review_status == 0 || review_status == 3 )) || exit "$review_status"
 (( verify_status == 0 )) || exit "$verify_status"
+(( review_status == 0 || review_status == 3 )) || exit "$review_status"
 "${admin[@]}" -e "DROP USER '$reader'@'localhost'"
 db_reader=0
 if (( review_status == 3 )); then

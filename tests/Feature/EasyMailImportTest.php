@@ -7,6 +7,9 @@ use App\Models\Delivery;
 use App\Models\Form;
 use App\Models\FormRevision;
 use App\Models\Submission;
+use App\Models\User;
+use App\Services\Admin\FormEditor;
+use App\Services\EasyMail\HistoryReader;
 use App\Services\EasyMail\ImportGuard;
 use App\Services\ReceiptPurge;
 use Illuminate\Database\Connection;
@@ -42,6 +45,149 @@ class EasyMailImportTest extends TestCase
     {
         File::deleteDirectory($this->dir);
         parent::tearDown();
+    }
+
+    public function test_strict_mixed_import_keeps_local_problems_as_drafts_and_reconciles_their_receipts(): void
+    {
+        $forms = $this->legacy->table('forms');
+        $original = (array) $forms->first();
+        $items = $this->legacy->table('form_items')->get();
+        foreach ([6 => 'decoration', 7 => 'no-email', 8 => 'raw-history', 9 => 'tag', 10 => 'no-fields'] as $id => $url) {
+            $forms->insert([...$original, 'id' => $id, 'url' => $url, 'thanks_message' => match ($id) {
+                6 => '<p>受付完了</p>', 9 => '#spt#', default => '',
+            }]);
+            foreach ($items as $item) {
+                if ($id !== 10 && !($id === 7 && $item->form_block_id === '8')) {
+                    $this->legacy->table('form_items')->insert([...(array) $item, 'id' => $id * 100 + $item->id, 'form_id' => $id]);
+                }
+            }
+        }
+        $receipt = (array) $this->legacy->table('histories')->first();
+        foreach ([88 => 8, 90 => 42, 91 => 43] as $id => $formId) {
+            $this->legacy->table('histories')->insert([...$receipt, 'id' => $id, 'form_id' => $formId, 'content' => "旧独自本文 {$id}"]);
+        }
+        $this->legacy->statement('CREATE TABLE unused_plugin_records (id INTEGER)');
+        $options = ['--source-version' => '2.00.125', '--strict' => true, '--source-base' => config('app.url')];
+        $dry = $this->runImport([...$options, '--dry-run' => true]);
+        $this->assertSame([], $dry['integrity_errors']);
+        $this->assertCount(8, $dry['forms']);
+        $this->assertDatabaseEmpty('forms');
+        $this->assertDatabaseEmpty('submissions');
+
+        $this->runImport($options);
+        $written = $this->runImport($options);
+        $verified = $this->runImport([...$options, '--verify-only' => true]);
+        $this->assertTrue($verified['reconciliation']['ok']);
+        foreach ([$dry, $written, $verified] as $report) {
+            $rows = array_column($report['forms'], null, 'legacy_id');
+            $this->assertTrue($rows[5]['same_public_url']);
+            $this->assertSame([5], array_keys(array_filter($rows, fn ($row) => $row['published'])));
+            foreach ([6, 7, 8] as $id) {
+                $this->assertSame([], $rows[$id]['issues']);
+                $this->assertNotEmpty($rows[$id]['warnings']);
+                $this->assertSame($rows[$id]['source_entry_url'], $rows[$id]['planned_entry_url']);
+                $this->assertNull($rows[$id]['target_entry_url']);
+            }
+            foreach ([9, 10, 42, 43] as $id) {
+                $this->assertNotEmpty($rows[$id]['issues']);
+            }
+            foreach ($rows as $row) {
+                $this->assertSame([], $row['integrity_errors']);
+            }
+            $this->assertSame('/legacy-draft-42', $rows[42]['url']);
+            $this->assertSame('/legacy-draft-43', $rows[43]['url']);
+        }
+        $this->assertSame(8, FormRevision::count());
+        $this->assertSame(4, Submission::count());
+        $this->assertSame('旧独自本文 88', Submission::where('legacy_id', 88)->sole()->snapshot['legacy_history']['content']);
+
+        // The final import reapplies the source. An operator can then preview and publish a reviewed warning.
+        $this->actingAs(User::factory()->create(['role' => 'admin']));
+        $decorated = Form::where('legacy_id', 6)->sole();
+        $this->get('/decoration')->assertNotFound();
+        $this->get(route('admin.edit', $decorated))->assertOk()->assertSee('HTMLの装飾');
+        $this->get(route('admin.preview', $decorated))->assertOk();
+        $this->post(route('admin.publish', $decorated), ['version' => app(FormEditor::class)->version($decorated)])->assertSessionHasNoErrors();
+        $this->get('/decoration')->assertOk();
+        $unsupported = Form::where('legacy_id', 9)->sole();
+        $this->post(route('admin.publish', $unsupported), ['version' => app(FormEditor::class)->version($unsupported)])->assertSessionHasErrors('definition');
+        $this->get('/tag')->assertNotFound();
+    }
+
+    public function test_strict_reports_url_collisions_broken_field_references_and_missing_attachments_as_integrity_errors(): void
+    {
+        $this->legacy->table('forms')->insert([...(array) $this->legacy->table('forms')->first(), 'id' => 6]);
+        $this->legacy->table('form_items')->where('id', 101)->update(['form_block_id' => '377']);
+        $this->legacy->table('histories')->update(['attach_files' => 'missing.txt,../unsafe.txt']);
+        $report = $this->runImport(['--dry-run' => true, '--strict' => true], 2);
+        $errors = implode("\n", $report['forms'][0]['integrity_errors']);
+        foreach (['同じ公開パス', 'form_items #101', 'missing.txt', '安全なファイル名'] as $problem) {
+            $this->assertStringContainsString($problem, $errors);
+        }
+        $this->assertStringContainsString('同じ公開パス', implode(' ', $report['forms'][1]['integrity_errors']));
+        $this->assertDatabaseEmpty('forms');
+    }
+
+    public function test_strict_source_schema_mismatch_returns_two_and_an_actionable_report(): void
+    {
+        $this->legacy->statement('ALTER TABLE histories RENAME COLUMN content TO missing_content');
+        $report = $this->runImport(['--dry-run' => true, '--strict' => true], 2);
+        $this->assertSame([], $report['forms']);
+        $this->assertStringContainsString('histories', implode(' ', $report['integrity_errors']));
+        $this->assertDatabaseEmpty('forms');
+    }
+
+    public function test_an_attachment_lost_during_import_holds_the_form_and_fails_strict(): void
+    {
+        $path = $this->dir.'/late.txt';
+        file_put_contents($path, 'source copy');
+        $this->legacy->table('histories')->update(['attach_files' => 'late.txt']);
+        $this->runImport(['--dry-run' => true, '--strict' => true]);
+        Form::created(static fn () => unlink($path));
+        $report = $this->runImport(['--strict' => true], 2);
+        $this->assertStringContainsString('late.txt', implode(' ', $report['forms'][0]['integrity_errors']));
+        $this->assertFalse(Form::sole()->published);
+        $this->assertDatabaseCount('submissions', 1);
+        $this->assertDatabaseEmpty('attachments');
+    }
+
+    public function test_a_checksum_mismatch_during_copy_is_an_integrity_error_and_can_be_retried(): void
+    {
+        file_put_contents($this->dir.'/changing.txt', 'original');
+        $this->legacy->table('histories')->update(['attach_files' => 'changing.txt']);
+        $this->app->instance(HistoryReader::class, new class extends HistoryReader {
+            public function digest(string $source, int $historyId): string
+            {
+                $digest = parent::digest($source, $historyId);
+                file_put_contents($source, 'changed');
+                return $digest;
+            }
+        });
+        $failure = $this->runImport(['--strict' => true], 2);
+        $this->assertStringContainsString('SHA-256', implode(' ', $failure['integrity_errors']));
+        $this->assertFalse(Form::sole()->published);
+        $this->assertDatabaseEmpty('attachments');
+        $this->assertSame([], Storage::disk('local')->allFiles());
+        $this->runImport(['--strict' => true]);
+        $this->assertTrue(Form::sole()->published);
+        $this->assertSame('changed', Storage::disk('local')->get(Attachment::sole()->path));
+    }
+
+    public function test_an_earlier_editor_draft_cannot_bypass_a_later_import_hold(): void
+    {
+        $this->runImport();
+        $form = Form::sole();
+        $draft = $form->definition;
+        $draft['settings']['name'] = '編集中の名前';
+        $form->update(['draft_definition' => $draft]);
+        $this->legacy->table('histories')->update(['attach_files' => 'missing.txt']);
+        $this->runImport(['--strict' => true], 2);
+        $form->refresh();
+        $this->assertFalse($form->published);
+        $this->actingAs(User::factory()->create(['role' => 'admin']));
+        $this->get(route('admin.edit', $form))->assertOk()->assertSee('編集中の名前')->assertSee('旧履歴の添付');
+        $this->post(route('admin.publish', $form), ['version' => app(FormEditor::class)->version($form)])->assertSessionHasErrors('definition');
+        $this->assertFalse($form->fresh()->published);
     }
 
     public function test_dry_run_and_repeat_import_keep_historical_columns_and_private_files(): void
@@ -195,10 +341,10 @@ class EasyMailImportTest extends TestCase
         $this->runImport(['--form' => 5]);
         $this->assertTrue(Form::where('legacy_id', 6)->sole()->published);
         $this->assertSame('still_published', $this->verify(2, ['--form' => 6])['forms'][0]['form_state']);
-        $report = $this->runImport(['--dry-run' => true]);
+        $report = $this->runImport(['--dry-run' => true, '--strict' => true]);
         $this->assertEquals([6], $report['removed_forms']);
         $this->assertTrue(Form::where('legacy_id', 6)->sole()->published);
-        $this->runImport();
+        $this->runImport(['--strict' => true]);
         $this->assertFalse(Form::where('legacy_id', 6)->sole()->published);
         $this->assertSame('withdrawn', $this->verify(0, ['--form' => 6])['forms'][0]['form_state']);
     }
@@ -211,6 +357,7 @@ class EasyMailImportTest extends TestCase
         $this->legacy->table('histories')->update(['attach_files' => 'unavailable.txt']);
         $report = $this->runImport()['forms'][0];
         $this->assertFalse($report['published']);
+        $this->assertTrue($report['archived']);
         $this->assertSame(0, $report['resolved_files']);
         $this->assertStringNotContainsString('unavailable.txt', implode(' ', $report['warnings']));
         $this->assertFalse(Form::sole()->published);
@@ -389,8 +536,8 @@ class EasyMailImportTest extends TestCase
     public function test_an_unassignable_history_fails_full_handoff_before_any_import(): void
     {
         $this->legacy->table('histories')->update(['form_id' => null]);
-        foreach ([[], ['--verify-only' => true]] as $mode) {
-            $this->assertSame(1, Artisan::call('easymail:import', ['--source-version' => '2.01.004', ...$mode]));
+        foreach ([[[], 1], [['--strict' => true], 2], [['--verify-only' => true], 2]] as [$mode, $expected]) {
+            $this->assertSame($expected, Artisan::call('easymail:import', ['--source-version' => '2.01.004', ...$mode]));
             $this->assertStringContainsString('旧履歴 #80 のフォームID', Artisan::output());
         }
         $this->assertDatabaseCount('forms', 0);
@@ -488,11 +635,11 @@ class EasyMailImportTest extends TestCase
         return json_decode($output, true, flags: JSON_THROW_ON_ERROR)['reconciliation'];
     }
 
-    private function runImport(array $options = []): array
+    private function runImport(array $options = [], int $expected = 0): array
     {
         $code = Artisan::call('easymail:import', ['--json' => true, '--source-version' => '2.01.004', '--attachments' => $this->dir, ...$options]);
         $output = Artisan::output();
-        $this->assertSame(0, $code, $output);
+        $this->assertSame($expected, $code, $output);
         return json_decode($output, true, flags: JSON_THROW_ON_ERROR);
     }
 }

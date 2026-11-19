@@ -3,7 +3,9 @@
 namespace App\Services\EasyMail;
 
 use App\Services\Admin\FormEditor;
+use App\Services\SafeMarkup;
 use App\Services\ThemeAssets;
+use App\Services\ThemeAssets\StylesheetReport;
 use FilesystemIterator;
 use RuntimeException;
 use UnexpectedValueException;
@@ -57,7 +59,7 @@ final class CustomThemeScanner
     {
         $result = [
             'layout' => null, 'score' => 0, 'changes' => ['changed' => [], 'added' => [], 'removed' => []],
-            'behaviors' => [], 'warnings' => [], 'errors' => [], 'header' => '', 'footer' => '', 'logo' => null,
+            'behaviors' => [], 'warnings' => [], 'errors' => [], 'integrity' => [], 'header' => '', 'footer' => '', 'logo' => null,
             'assets' => [], 'stylesheets' => [], 'fingerprint' => null,
         ];
         if (strlen($name) > 255 || !preg_match('/\A[\pL\pM\pN_+ -][\pL\pM\pN._+ -]*\z/u', $name) || isset(FormEditor::THEMES[$name])) {
@@ -69,6 +71,9 @@ final class CustomThemeScanner
             $files = $this->inventory($this->directory.'/'.$name);
         } catch (RuntimeException $error) {
             $result['errors'][] = $error->getMessage();
+            if ($error instanceof IntegrityException) {
+                $result['integrity'][] = $error->getMessage();
+            }
             return $result;
         }
         $hashes = array_column($files, 'hash', 'path');
@@ -110,7 +115,7 @@ final class CustomThemeScanner
     private function requireDirectory(string $path, string $label): void
     {
         if (realpath($path) !== $path || !is_dir($path) || !is_readable($path)) {
-            throw new RuntimeException("{$label}: ディレクトリが欠損、リンク、または読み取り不能です。");
+            throw new IntegrityException("{$label}: ディレクトリが欠損、リンク、または読み取り不能です。");
         }
     }
 
@@ -126,7 +131,7 @@ final class CustomThemeScanner
             try {
                 $items = new FilesystemIterator($folder);
             } catch (UnexpectedValueException) {
-                throw new RuntimeException(($prefix ?: basename($directory)).': ディレクトリを読み取れません。');
+                throw new IntegrityException(($prefix ?: basename($directory)).': ディレクトリを読み取れません。');
             }
             foreach ($items as $item) {
                 $filename = $item->getFilename();
@@ -141,7 +146,7 @@ final class CustomThemeScanner
                     throw new RuntimeException("{$path}: ファイル・ディレクトリの数が 1024 件、または階層が 16 段を超えています。");
                 }
                 if ($item->isLink()) {
-                    throw new RuntimeException("{$path}: シンボリックリンクを参照できません。");
+                    throw new IntegrityException("{$path}: シンボリックリンクを参照できません。");
                 }
                 if ($item->isDir()) {
                     $pending[] = $path;
@@ -161,23 +166,23 @@ final class CustomThemeScanner
         clearstatcache(true, $file);
         $stat = @lstat($file);
         if (!$stat || ($stat['mode'] & 0170000) !== 0100000 || $stat['nlink'] !== 1 || realpath($file) !== $file || !is_readable($file)) {
-            throw new RuntimeException("{$label}: 通常ファイルとして安全に読み取れません。");
+            throw new IntegrityException("{$label}: 通常ファイルとして安全に読み取れません。");
         }
         if ($stat['size'] > $limit) {
             throw new RuntimeException("{$label}: ファイル容量が読み取り上限を超えています。");
         }
         $stream = @fopen($file, 'rb');
         if (!$stream) {
-            throw new RuntimeException("{$label}: ファイルを開けません。");
+            throw new IntegrityException("{$label}: ファイルを開けません。");
         }
         try {
             $opened = fstat($stream);
             if (!$opened || $opened['dev'] !== $stat['dev'] || $opened['ino'] !== $stat['ino'] || $opened['nlink'] !== 1) {
-                throw new RuntimeException("{$label}: 読み取り中にファイルが変更されました。");
+                throw new IntegrityException("{$label}: 読み取り中にファイルが変更されました。");
             }
             $bytes = stream_get_contents($stream, $limit + 1);
             if ($bytes === false || strlen($bytes) !== $stat['size'] || !feof($stream)) {
-                throw new RuntimeException("{$label}: ファイル全体を読み取れません。");
+                throw new IntegrityException("{$label}: ファイル全体を読み取れません。");
             }
             return $bytes;
         } finally {
@@ -263,15 +268,20 @@ final class CustomThemeScanner
             }
         }
         $order = array_unique([...$markup->stylesheets, ...array_keys($styles)]);
+        $cssReport = new StylesheetReport(linkedLogo: SafeMarkup::hasLinkedLogo($result['header']));
         foreach ($order as $path) {
             if (isset($styles[$path])) {
-                $asset = ThemeAssets::prepare($path, $styles[$path], $images, $warnings);
+                $asset = ThemeAssets::prepare($path, $styles[$path], $images, $warnings, $cssReport);
                 if ($asset !== null) {
                     $result['assets'][$path] = $asset;
                     $result['stylesheets'][] = $path;
                 }
             }
         }
+        if ($cssReport->backgroundLogo !== null) {
+            $result['background_logo'] = $result['logo'] = $cssReport->backgroundLogo;
+        }
+        array_push($warnings, ...$cssReport->warnings());
         if (count($warnings) > 256) {
             $omitted = count($warnings) - 256;
             $warnings = array_slice($warnings, 0, 256);

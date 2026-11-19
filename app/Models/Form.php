@@ -26,6 +26,12 @@ class Form extends Model
         return PublicFormUrl::form($this->slug, $action);
     }
 
+    public function hasPublicEntry(?Theme $theme): bool
+    {
+        return $this->published && !$this->archived_at && empty($this->definition['issues'])
+            && empty($this->definition['review_warnings']) && !$theme?->pendingReview();
+    }
+
     public function submissions(): HasMany
     {
         return $this->hasMany(Submission::class);

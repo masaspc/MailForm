@@ -82,7 +82,21 @@ class FormEditor
 
     public function draft(Form $form): array
     {
-        return $form->draft_definition ?? $form->definition;
+        $draft = $form->draft_definition;
+        if ($draft === null || $form->legacy_id === null) {
+            return $draft ?? $form->definition;
+        }
+
+        // Keep the operator's edits while applying the installation checks from the latest import.
+        $current = $form->definition;
+        $installation = $current['installation_issues'] ?? $current['issues'] ?? [];
+        $draftIssues = array_diff($draft['issues'] ?? [], $draft['installation_issues'] ?? []);
+        $draft['issues'] = array_values(array_unique([...$installation, ...$draftIssues, ...($draft['validation_issues'] ?? [])]));
+        $draft['installation_issues'] = $installation;
+        if (!empty($current['review_warnings'])) {
+            $draft['review_warnings'] = array_values(array_unique([...($draft['review_warnings'] ?? []), ...$current['review_warnings']]));
+        }
+        return $draft;
     }
 
     public function version(Form $form): string

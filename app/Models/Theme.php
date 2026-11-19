@@ -59,6 +59,7 @@ class Theme extends Model
                 ->chunkById(100, function ($forms) use (&$count) {
                     foreach ($forms as $form) {
                         $publish = !$form->archived_at && empty($form->definition['issues'])
+                            && empty($form->definition['review_warnings'])
                             && (int) ($form->definition['settings']['view_flag'] ?? 0) === 1;
                         $form->update(['published' => $publish, 'awaiting_theme_publication' => false]);
                         $count += (int) $publish;

@@ -13,6 +13,7 @@ final class SafeMarkup
 {
     private const FORMATTING = ['p', 'br', 'strong', 'b', 'em', 'i', 'u', 'ul', 'ol', 'li', 'div', 'span', 'small', 'pre', 'blockquote'];
     public const THEME_FORMATTING = [...self::FORMATTING, 'section', 'nav', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'];
+    public const LINKED_LOGO_CLASS = 'mailform-header-logo';
 
     public static function themeClasses(string $value): ?string
     {
@@ -48,11 +49,29 @@ final class SafeMarkup
             $image = '<img src="'.$src.'"';
             if (str_contains($header, $image)) {
                 $header = str_replace($image, $image.' data-theme-logo', $header);
-            } else {
+            } elseif (empty($theme->import_report['background_logo']) || !self::hasLinkedLogo($header)) {
                 $header = $image.' data-theme-logo alt="'.e($header === '' ? $theme->name : '').'">'.$header;
             }
         }
         return new HtmlString($header !== '' ? $header : e($fallback));
+    }
+
+    public static function hasLinkedLogo(?string $header): bool
+    {
+        if (!$header || !str_contains($header, self::LINKED_LOGO_CLASS) || !($body = self::body($header))) {
+            return false;
+        }
+        foreach ($body->getElementsByTagName('a') as $link) {
+            if (!$link->hasAttribute('href') || $link->getElementsByTagName('img')->length) {
+                continue;
+            }
+            for ($parent = $link->parentNode; $parent instanceof DOMElement; $parent = $parent->parentNode) {
+                if (in_array(self::LINKED_LOGO_CLASS, explode(' ', $parent->getAttribute('class')), true)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /** Keep the selected logo in its original position in imported header markup. */

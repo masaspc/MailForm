@@ -7,6 +7,7 @@
 <header class="head"><div><div class="kicker">FORM EDITOR</div><h1>{{ $form ? ($settings['name'] ?? $form->name) : 'フォームを作成' }}</h1></div>
 @if($form)<span @class(['pill', 'good' => $form->published])>{{ $form->published ? '公開中 · 第'.$form->revision.'版' : '下書き' }}</span>@endif</header>
 @if($definition['issues'] ?? [])<div class="alert"><strong>公開前に確認が必要な移行項目</strong><p>編集できる設定は、下書き保存時に再検査します。設置ファイル固有の問題は移行元で修正し、再度取り込んでください。</p><ul>@foreach($definition['issues'] as $issue)<li>{{ $issue }}</li>@endforeach</ul></div>@endif
+@if($definition['review_warnings'] ?? [])<div class="alert"><strong>移行時に確認が必要な項目</strong><ul>@foreach($definition['review_warnings'] as $warning)<li>{{ $warning }}</li>@endforeach</ul><p>受信履歴とプレビューで内容を確認し、ほかの公開保留項目を解消してから「保存済みの内容を公開」を選んでください。</p></div>@endif
 @unless($form)
 <nav class="presets" aria-label="ひな形"><strong>ひな形</strong>
 @foreach(['contact'=>'お問い合わせ','event'=>'イベント申し込み','questionnaire'=>'アンケート'] as $value => $label)

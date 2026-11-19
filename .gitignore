@@ -35,3 +35,4 @@ Thumbs.db
 /backups/
 /imports/
 !/tests/Fixtures/easymail-2.01.004.sql
+!/tests/Fixtures/easymail-mixed-drafts.sql

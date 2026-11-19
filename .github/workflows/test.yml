@@ -144,6 +144,14 @@ jobs:
             import --dry-run | jq -e '.themes.garden_example.layout == "gradation" and .forms[0].theme_review == "pending" and (.forms[0].published | not)'
             import | jq -e '.themes.garden_example.changes.added | index("js/ad_cookie.js") != null'
             import --verify-only | jq -e '.reconciliation.ok and (.forms[0].same_public_url | not)'
-            php -r 'require "vendor/autoload.php"; $app = require "bootstrap/app.php"; $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap(); $theme = App\Models\Theme::whereSlug("garden_example")->sole(); exit($theme->logo === "images/garden.svg" && $theme->approveForPublication() === 1 ? 0 : 1);'
+            php -r 'require "vendor/autoload.php"; $app = require "bootstrap/app.php"; $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap(); $theme = App\Models\Theme::whereSlug("garden_example")->sole(); exit($theme->logo === "images/logo_main.svg" && $theme->approveForPublication() === 1 ? 0 : 1);'
             import --verify-only | jq -e '.reconciliation.ok and .forms[0].same_public_url'
           fi
+      - name: Import and reconcile a mixed 120-form backup on AlmaLinux 10.3
+        if: matrix.php == '8.4' && matrix.database.image == 'mariadb:11.8'
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/suite:ro" -v "$EASYMAIL_SOURCE_ROOT:/stock:ro" \
+            almalinux:10.3@sha256:ccf217024b3d5e268cc208d1edb384a1edee6359370cf6ea1ecbc42254e57375 bash -ec '
+              dnf -qy --setopt=install_weak_deps=False install php8.4-cli php8.4-xml php8.4-mbstring php8.4-mysqlnd \
+                mariadb11.8 mariadb11.8-server jq shadow-utils util-linux openssl
+              bash /suite/tests/deploy/mixed-import.sh /suite /stock'

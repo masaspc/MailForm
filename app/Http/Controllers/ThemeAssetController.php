@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Theme;
 use App\Services\ThemeAssets;
+use App\Services\ThemeCatalog;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Auth;
@@ -23,6 +24,9 @@ final class ThemeAssetController
         abort_unless(ThemeAssets::matchesPath($path, $descriptor), 404);
         $bytes = ThemeAssets::read($descriptor);
         abort_if($bytes === null, 404);
+        if ($descriptor['mime'] === 'text/css') {
+            $bytes .= ThemeCatalog::logoOverride($theme, $path);
+        }
 
         return response($bytes, 200, ['Content-Type' => $descriptor['mime']]);
     }

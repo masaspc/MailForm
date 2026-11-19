@@ -106,6 +106,7 @@ class FormController
             }
             $definition = $this->editor->draft($form);
             $this->editor->checkPublish($definition, $form);
+            unset($definition['review_warnings']);
             $definition['settings']['view_flag'] = 1;
             $form->fill(['revision' => $form->revision + 1, 'definition' => $definition, 'draft_definition' => null, 'published' => true, 'awaiting_theme_publication' => false]);
             $this->saveIdentity($form, $definition);

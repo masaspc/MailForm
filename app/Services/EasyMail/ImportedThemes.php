@@ -13,10 +13,10 @@ final class ImportedThemes
     /** Merge each editable field and asset against what the previous backup supplied. */
     public function sync(string $name, string $version, array $scan, bool $dry, bool $verify, bool $overwrite, bool $needsAlias): array
     {
-        $report = array_intersect_key($scan, array_flip(['layout', 'score', 'changes', 'behaviors', 'warnings', 'errors', 'fingerprint', 'stylesheets']));
+        $report = array_intersect_key($scan, array_flip(['layout', 'score', 'changes', 'behaviors', 'warnings', 'errors', 'fingerprint', 'stylesheets', 'background_logo']));
         $report += ['source_name' => $name, 'version' => $version];
         if ($report['errors'] || !$report['layout']) {
-            return $report + ['status' => 'blocked', 'slug' => null, 'integrity' => []];
+            return $report + ['status' => 'blocked', 'slug' => null, 'integrity' => $scan['integrity']];
         }
         $work = function () use ($name, $scan, $report, $dry, $verify, $overwrite, $needsAlias) {
             $key = hash('sha256', $name);

@@ -33,11 +33,11 @@ final readonly class SourceRelease
         $config = $root.'/config/app.php';
         $source = realpath($config) === $config && is_file($config) && is_readable($config) ? file_get_contents($config, length: 262144) : '';
         if (!$source || !preg_match('~[\'"]version[\'"]\s*=>\s*env\(\s*[\'"]APP_VERSION[\'"]\s*,\s*[\'"]([0-9.]+)[\'"]\s*\)~', $source, $match)) {
-            throw new RuntimeException('設置ファイル config/app.php から版を特定できません。DB単独の場合は --source-version を指定してください。');
+            throw new IntegrityException('設置ファイル config/app.php から版を特定できません。DB単独の場合は --source-version を指定してください。');
         }
         $version = $match[1];
         if (!in_array($version, self::VERSIONS, true) || ($declared !== null && $declared !== $version)) {
-            throw new RuntimeException("設置版 {$version} は指定版または対応版と一致しません。");
+            throw new IntegrityException("設置版 {$version} は指定版または対応版と一致しません。");
         }
         return new self($version, $root);
     }

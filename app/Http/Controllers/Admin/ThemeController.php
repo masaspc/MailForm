@@ -7,6 +7,7 @@ use App\Models\Theme;
 use App\Services\Admin\FormEditor;
 use App\Services\SafeMarkup;
 use App\Services\ThemeAssets;
+use App\Services\ThemeAssets\StylesheetReport;
 use App\Services\ThemeCatalog;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\Request;
@@ -103,7 +104,9 @@ class ThemeController
             $this->checkVersion($theme, $data['version']);
             $warnings = [];
             $bytes = $upload ? $upload->get() : $data['css'];
-            $asset = is_string($bytes) ? ThemeAssets::prepare($path, $bytes, ThemeCatalog::files($theme, 'image/'), $warnings) : null;
+            $cssReport = new StylesheetReport(linkedLogo: SafeMarkup::hasLinkedLogo($theme->header));
+            $asset = is_string($bytes) ? ThemeAssets::prepare($path, $bytes, ThemeCatalog::files($theme, 'image/'), $warnings, $cssReport) : null;
+            array_push($warnings, ...$cssReport->warnings());
             if (!$asset || $warnings) {
                 throw ValidationException::withMessages([($upload ? 'file' : 'css') => $warnings ?: ['ファイルの内容を読み込めません。']]);
             }

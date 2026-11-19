@@ -175,20 +175,104 @@ class CustomThemeImportTest extends TestCase
         $this->assertFalse(Form::where('slug', 'contact')->sole()->published);
         DB::connection('legacy')->table('histories')->delete();
         DB::connection('legacy')->table('forms')->where('id', 5)->delete();
-        $this->runImport([], 2); // Removed legacy forms have their own strict warning.
+        $before = $this->runImport(['--verify-only' => true, '--strict' => false], 2);
+        $checks = array_column($before['reconciliation']['forms'], null, 'legacy_id');
+        $this->assertSame('awaiting_theme_publication', $checks[5]['form_state']);
+        $this->runImport(['--dry-run' => true]);
+        $this->runImport(); // Apply the withdrawal that verification detected above.
         $this->assertSame(0, $theme->approveForPublication());
         $this->assertFalse(Form::where('slug', 'contact')->sole()->published);
+        $this->runImport();
+        $checks = $this->runImport(['--verify-only' => true], 2)['reconciliation']['forms'];
+        $this->assertSame(1, array_column($checks, null, 'legacy_id')[5]['absent_from_source']['retained']);
     }
 
-    public function test_missing_evidence_blocks_only_affected_form_and_real_warnings_are_still_strict(): void
+    public function test_unrecognized_custom_layout_holds_affected_forms_without_failing_strict(): void
     {
         $this->backup('2.00.125');
         File::deleteDirectory($this->custom);
         File::ensureDirectoryExists($this->custom);
         file_put_contents($this->custom.'/alone.js', '// no stock match');
-        $report = $this->runImport(['--dry-run' => true], 2);
+        $report = $this->runImport(['--dry-run' => true]);
         $this->assertNotEmpty($report['forms'][0]['issues']);
         $this->assertDatabaseEmpty('themes');
         $this->assertFalse($report['forms'][0]['published']);
+    }
+
+    public function test_approving_a_theme_only_releases_forms_with_no_local_warnings(): void
+    {
+        $this->backup('2.00.125');
+        DB::connection('legacy')->table('forms')->where('id', 6)->update(['view_flag' => 1, 'thanks_message' => '<p>確認</p>']);
+        $report = $this->runImport();
+        $this->assertTrue($report['forms'][0]['awaiting_theme_publication']);
+        $this->assertFalse($report['forms'][1]['awaiting_theme_publication']);
+        $this->assertSame(1, Theme::sole()->approveForPublication());
+        $approved = $this->runImport(['--verify-only' => true]);
+        $this->assertTrue($approved['forms'][0]['same_public_url']);
+        $this->assertNull($approved['forms'][1]['target_entry_url']);
+        $this->assertTrue($approved['reconciliation']['ok']);
+        $this->assertFalse(Form::where('slug', 'private')->sole()->published);
+    }
+
+    public function test_verification_reports_only_entries_served_by_the_public_controller(): void
+    {
+        $this->backup('2.00.125');
+        DB::connection('legacy')->table('forms')->where('id', 6)->update(['view_flag' => 1, 'thanks_message' => '<p>確認</p>']);
+        $this->runImport();
+        // Simulate an inconsistent published flag with a pending theme, then with a pending form review.
+        Form::where('slug', 'contact')->update(['published' => true]);
+        $this->get('/contact')->assertNotFound();
+        $before = $this->runImport(['--verify-only' => true], 2);
+        $this->assertNull($before['forms'][0]['target_entry_url']);
+        Theme::sole()->approveForPublication();
+        Form::where('slug', 'private')->update(['published' => true]);
+        $this->get('/private')->assertNotFound();
+        $after = $this->runImport(['--verify-only' => true], 2);
+        $this->assertNull($after['forms'][1]['target_entry_url']);
+    }
+
+    public function test_unreadable_source_theme_file_is_an_integrity_failure_even_when_the_theme_is_unused(): void
+    {
+        $this->backup('2.00.125');
+        DB::connection('legacy')->table('forms')->update(['theme_name' => 'gray']);
+        symlink($this->dir.'/config/app.php', $this->custom.'/bad.php');
+        $report = $this->runImport(['--dry-run' => true], 2);
+        $this->assertStringContainsString('bad.php', implode(' ', $report['integrity_errors']));
+        $this->assertTrue($report['forms'][0]['published']);
+    }
+
+    public function test_customized_readable_core_requires_review_and_a_missing_core_file_fails_strict(): void
+    {
+        $this->backup('2.00.125');
+        $path = 'app/Http/Controllers/FormController.php';
+        File::ensureDirectoryExists(dirname($this->dir.'/'.$path));
+        file_put_contents($this->dir.'/'.$path, 'custom handling');
+        $manifest = $this->dir.'/application/resources/easymail/2.00.125-sha256.json';
+        $files = json_decode(file_get_contents($manifest), true, flags: JSON_THROW_ON_ERROR);
+        $files[$path] = hash('sha256', 'stock');
+        file_put_contents($manifest, json_encode($files, JSON_THROW_ON_ERROR));
+
+        $review = $this->runImport(['--dry-run' => true]);
+        $this->assertSame([], $review['integrity_errors']);
+        $this->assertSame([], $review['forms'][0]['integrity_errors']);
+        $this->assertStringContainsString($path, implode(' ', $review['forms'][0]['issues']));
+        $this->assertFalse($review['forms'][0]['awaiting_theme_publication']);
+        unlink($this->dir.'/'.$path);
+        $failed = $this->runImport(['--dry-run' => true], 2);
+        $this->assertStringContainsString($path, implode(' ', $failed['integrity_errors']));
+        $this->assertStringContainsString($path, implode(' ', $failed['forms'][0]['integrity_errors']));
+    }
+
+    public function test_a_form_without_a_theme_setting_is_a_local_hold_but_a_missing_referenced_theme_is_an_error(): void
+    {
+        $this->backup('2.00.125');
+        $form = DB::connection('legacy')->table('forms')->where('id', 6);
+        $form->update(['theme_name' => null]);
+        $review = $this->runImport(['--dry-run' => true])['forms'][1];
+        $this->assertNotEmpty($review['issues']);
+        $this->assertSame([], $review['integrity_errors']);
+        $form->update(['theme_name' => 'missing-custom']);
+        $failed = $this->runImport(['--dry-run' => true], 2)['forms'][1];
+        $this->assertStringContainsString('missing-custom', implode(' ', $failed['integrity_errors']));
     }
 }

@@ -199,13 +199,19 @@ class HistoryReader
         $disk = Storage::disk('local');
         $path = "easymail/{$historyId}/{$digest}";
         if (!$disk->exists($path) || hash_file('sha256', $disk->path($path)) !== $digest) {
-            $stream = fopen($source, 'rb');
+            $stream = @fopen($source, 'rb');
             if (!$stream) {
-                throw new RuntimeException("履歴 #{$historyId} の添付を読み込めません。");
+                throw new IntegrityException("履歴 #{$historyId} の旧添付を読み込めません: {$name}");
             }
             $temp = $path.'.'.bin2hex(random_bytes(12)).'.tmp';
             try {
-                if (!$disk->put($temp, $stream, 'private') || hash_file('sha256', $disk->path($temp)) !== $digest || !$disk->move($temp, $path)) {
+                if (!$disk->put($temp, $stream, 'private')) {
+                    throw new RuntimeException("履歴 #{$historyId} の添付の保存に失敗しました。");
+                }
+                if (hash_file('sha256', $disk->path($temp)) !== $digest) {
+                    throw new IntegrityException("履歴 #{$historyId} の旧添付とコピーの SHA-256 が一致しません: {$name}");
+                }
+                if (!$disk->move($temp, $path)) {
                     throw new RuntimeException("履歴 #{$historyId} の添付の保存に失敗しました。");
                 }
             } finally {
@@ -223,7 +229,7 @@ class HistoryReader
 
     public function digest(string $source, int $historyId): string
     {
-        return hash_file('sha256', $source) ?: throw new RuntimeException("履歴 #{$historyId} の添付を読み込めません。");
+        return @hash_file('sha256', $source) ?: throw new IntegrityException("履歴 #{$historyId} の旧添付を読み込めません: ".basename($source));
     }
 
     /** Only importer-owned digest paths can be retired, after the new DB references have committed. */

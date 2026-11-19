@@ -54,14 +54,14 @@ class Importer
         ];
         foreach ($required as $table => $columns) {
             if (!$schema->hasColumns($table, $columns)) {
-                throw new RuntimeException("旧DBの {$table} の構造が {$release->version} と一致しません。");
+                throw new IntegrityException("旧DBの {$table} の構造が {$release->version} と一致しません。");
             }
         }
         $uses200Schema = str_starts_with($release->version, '2.00.');
         if ($schema->hasColumns('migrations', ['migration'])) {
             $other = $uses200Schema ? '2022_12_14_071441_create_forms_table' : '2020_02_20_174440_create_forms_table';
             if ($this->source->table('migrations')->where('migration', $other)->exists()) {
-                throw new RuntimeException('旧DBのマイグレーション履歴と指定した配布版が一致しません。');
+                throw new IntegrityException('旧DBのマイグレーション履歴と指定した配布版が一致しません。');
             }
         }
         $prefix = $this->source->getTablePrefix();
@@ -77,7 +77,7 @@ class Importer
                 $this->sharedIssues[] = '有効なプラグインの適用範囲・移植を確認してください: '.($plugin['name'] ?: $plugin['uid']);
             }
         }
-        $report = ['version' => $release->version, 'dry_run' => $this->dryRun, 'verify_only' => $this->verification !== null, 'plugins' => $plugins, 'extra_tables' => array_values(array_diff($tables, $stockTables)), 'warnings' => [], 'forms' => []];
+        $report = ['version' => $release->version, 'dry_run' => $this->dryRun, 'verify_only' => $this->verification !== null, 'plugins' => $plugins, 'extra_tables' => array_values(array_diff($tables, $stockTables)), 'warnings' => [], 'integrity_errors' => $this->installation->coreIntegrity(), 'forms' => []];
         if ($root === null) {
             $report['warnings'][] = '--source-root 未指定のため標準テーマ・本体ファイルの変更は未照合です。';
         }
@@ -85,6 +85,11 @@ class Importer
             $report['warnings'][] = '標準構成に含まれないテーブルがあります。プラグインの残枠・連番などは個別に照合してください。';
         }
 
+        $histories = $this->source->table('histories')->when($formId !== null, fn ($q) => $q->where('form_id', $formId));
+        $unassigned = (clone $histories)->where(fn ($q) => $q->whereNull('form_id')->orWhere('form_id', '<=', 0))->orderBy('id')->value('id');
+        if ($unassigned !== null) {
+            throw new IntegrityException("旧履歴 #{$unassigned} のフォームIDを特定できません。移行元の複製を確認してください。");
+        }
         $this->themes = [];
         $scanner = $this->installation->customThemes();
         $onlyTheme = $formId === null ? null : $this->source->table('forms')->where('id', $formId)->value('theme_name');
@@ -97,14 +102,12 @@ class Importer
             }
             $this->themes[$name] = $imports->sync($name, $this->version, $scanner->scan($name),
                 $this->dryRun, $this->verification !== null, $overwriteThemes, $spellings[strtolower($name)] > 1);
+            foreach ($this->themes[$name]['integrity'] as $error) {
+                $report['integrity_errors'][] = "テーマ {$name}: {$error}";
+            }
         }
         $report['themes'] = $this->themes;
         $forms = $this->source->table('forms')->when($formId !== null, fn ($q) => $q->where('id', $formId))->lazyById(100);
-        $histories = $this->source->table('histories')->when($formId !== null, fn ($q) => $q->where('form_id', $formId));
-        $unassigned = (clone $histories)->where(fn ($q) => $q->whereNull('form_id')->orWhere('form_id', '<=', 0))->orderBy('id')->value('id');
-        if ($unassigned !== null) {
-            throw new RuntimeException("旧履歴 #{$unassigned} のフォームIDを特定できません。移行元の複製を確認してください。");
-        }
         $report['source_history_count'] = $histories->count();
         foreach ($forms as $row) {
             $report['forms'][] = $this->form((array) $row);
@@ -116,14 +119,14 @@ class Importer
             $report['forms'][] = $this->form(['id' => $id, 'name' => "旧フォーム #{$id}", 'url' => null, 'view_flag' => 0], true);
         }
         if (array_sum(array_column($report['forms'], 'history_count')) !== $report['source_history_count']) {
-            throw new RuntimeException('フォーム別の旧履歴件数が複製全体の対象件数と一致しません。複製を固定し、履歴のフォームIDを確認して再実行してください。');
+            throw new IntegrityException('フォーム別の旧履歴件数が複製全体の対象件数と一致しません。複製を固定し、履歴のフォームIDを確認して再実行してください。');
         }
         if ($formId !== null && !$report['forms'] && !($this->verification && Form::where('legacy_id', $formId)->exists())) {
             throw new RuntimeException("旧フォーム #{$formId} が見つかりません。");
         }
         $report['removed_forms'] = $formId === null ? $this->withdrawRemovedForms(array_column($report['forms'], 'legacy_id')) : [];
         if ($report['removed_forms']) {
-            $report['warnings'][] = '旧DBから削除されたフォームを公開停止にします（旧ID）: '.implode(', ', $report['removed_forms']);
+            $report['warnings'][] = '旧DBから削除されたフォームは公開停止の対象です（旧ID）: '.implode(', ', $report['removed_forms']);
         }
         $report['library'] = $this->importLibrary($formId, $report['warnings']);
         $report['warnings'] = array_values(array_unique($report['warnings']));
@@ -152,14 +155,19 @@ class Importer
     {
         $id = (int) $row['id'];
         $slug = (string) $row['url'];
+        $form = Form::where('legacy_id', $id)->first();
         $issues = $this->sharedIssues;
         $fileIssues = $this->installation->coreIssues();
+        $fileIntegrity = $this->installation->coreIntegrity();
         if (!$this->hasSourceFiles) {
-            $existing = Form::where('legacy_id', $id)->first();
-            $fileIssues = $existing?->definition['source_file_issues'] ?? [];
+            $fileIssues = $form?->definition['source_file_issues'] ?? [];
+            // Old definitions recorded the messages but not whether a file was unreadable.
+            $fileIntegrity = $form?->definition['source_file_integrity'] ?? ($fileIssues
+                ? ['前回の設置ファイルの指摘を再照合するには --source-root を指定してください。'] : []);
         }
         $issues = array_merge($issues, $fileIssues);
         $warnings = [];
+        $integrity = [];
         $validationIssues = [];
         $theme = $this->themes[$row['theme_name'] ?? ''] ?? null;
         $converted = $theme && $theme['status'] !== 'blocked';
@@ -167,26 +175,27 @@ class Importer
         if ($orphan) {
             $issues[] = '旧フォーム定義が削除されています。履歴保管用フォームを作成します。';
         } else {
-            $fields = $this->fields($id, $issues);
-            $themeIssues = $this->installation->forForm((string) $row['theme_name'], $slug, ($row['language'] ?? '') ?: 'ja', (bool) $converted);
+            $fields = $this->fields($id, $issues, $integrity);
+            $themeIssues = $this->installation->forForm((string) $row['theme_name'], $slug, ($row['language'] ?? '') ?: 'ja', (bool) $converted, $fileIntegrity, $theme !== null);
             if ($theme) {
                 array_push($themeIssues, ...$theme['errors'], ...$theme['integrity']);
+                array_push($fileIntegrity, ...$theme['integrity']);
             }
             if ($this->hasSourceFiles) {
-                $fileIssues = array_merge($fileIssues, $themeIssues);
+                $fileIssues = array_values(array_unique([...$fileIssues, ...$themeIssues, ...$fileIntegrity]));
             }
-            array_push($issues, ...$themeIssues);
+            array_push($issues, ...$themeIssues, ...$fileIntegrity);
             $validationIssues = $this->audit->inspect($row, $fields, $warnings, $this->version);
         }
 
-        $urlProblem = PublicFormUrl::problem($slug);
-        $urlConflict = $this->sourceUses($slug, $id) || $this->occupied($slug, $id);
+        $urlProblem = $orphan ? null : PublicFormUrl::problem($slug);
+        $urlConflict = !$orphan && ($this->sourceUses($slug, $id) || $this->occupied($slug, $id));
         if ($orphan || $urlConflict || $urlProblem !== null) {
             if ($urlProblem !== null) {
-                $issues[] = $urlProblem;
+                $issues[] = $integrity[] = $urlProblem;
             }
             if ($urlConflict) {
-                $issues[] = '同じ公開パスを使用するフォームがあります。';
+                $issues[] = $integrity[] = '同じ公開パスを使用するフォームがあります。';
             }
             $issues[] = '元のURLを使用できないため履歴用の仮URLを割り当てます。';
             $slug = 'legacy-draft-'.$id;
@@ -203,26 +212,46 @@ class Importer
         if ($converted) {
             $settings['theme_name'] = $theme['slug'];
         }
+        $name = mb_substr((string) ($row['name'] ?: "旧フォーム #{$id}"), 0, 255);
+        if (!$this->dryRun && !$form) {
+            // Receipts need a parent ID. Keep a new form closed until its receipts have been inspected and copied.
+            $form = $this->guard->transaction(fn () => Form::create(['legacy_id' => $id, 'slug' => $slug, 'name' => $name,
+                'published' => false, 'revision' => 0, 'definition' => ['settings' => $settings, 'fields' => $fields,
+                    'issues' => ['受信履歴の取込が完了していません。同じ複製で再実行してください。']]]));
+        }
+        $history = $this->histories($id, $fields, $form);
+        $reviewWarnings = $warnings;
+        if ($history['warnings']) {
+            $reviewWarnings[] = '標準形式と異なる受信履歴があります。移行レポートと保存した原文を確認してください。';
+        }
+        if ($history['integrity_errors']) {
+            $issues[] = '旧履歴の添付をすべて確認できません。移行レポートの該当ファイルを確認して再取込してください。';
+        }
         $installationIssues = array_values(array_unique($issues));
         $issues = array_values(array_unique([...$installationIssues, ...$validationIssues]));
         $definition = [
             'settings' => $settings, 'fields' => $fields, 'issues' => $issues, 'source_version' => $this->version,
             'source_file_issues' => $fileIssues, 'installation_issues' => $installationIssues, 'validation_issues' => $validationIssues,
         ];
-        $name = (string) ($row['name'] ?: "旧フォーム #{$id}");
-        $eligible = (int) $row['view_flag'] === 1 && !$issues;
+        if ($fileIssues) {
+            $definition['source_file_integrity'] = array_values(array_unique($fileIntegrity));
+        }
+        if ($reviewWarnings) {
+            $definition['review_warnings'] = array_values(array_unique($reviewWarnings));
+        }
+        $eligible = (int) $row['view_flag'] === 1 && !$issues && !$reviewWarnings;
         $pending = $converted && $theme['status'] === 'pending';
-        $attributes = ['slug' => $slug, 'name' => mb_substr($name, 0, 255), 'published' => $eligible && !$pending,
+        $attributes = ['slug' => $slug, 'name' => $name, 'published' => $eligible && !$pending,
             'awaiting_theme_publication' => $eligible && $pending, 'definition' => $definition];
 
-        $form = $this->dryRun ? Form::where('legacy_id', $id)->first() : $this->guard->transaction(function () use ($id, &$attributes, $definition, $converted, $theme, $eligible, &$pending) {
+        $form = $this->dryRun ? $form : $this->guard->transaction(function () use ($id, &$attributes, $definition, $converted, $theme, $eligible, &$pending) {
             if ($converted) {
                 $pending = Theme::where('slug', $theme['slug'])->lockForUpdate()->firstOrFail()->pendingReview();
                 $attributes['published'] = $eligible && !$pending;
                 $attributes['awaiting_theme_publication'] = $eligible && $pending;
             }
-            $form = Form::where('legacy_id', $id)->lockForUpdate()->first() ?? new Form(['legacy_id' => $id]);
-            $changed = !$form->exists || !JsonValue::same($form->definition, $definition);
+            $form = Form::where('legacy_id', $id)->lockForUpdate()->firstOrFail();
+            $changed = !JsonValue::same($form->definition, $definition);
             if ($changed) {
                 $form->revision = ($form->revision ?? 0) + 1;
             } else {
@@ -241,31 +270,33 @@ class Importer
             return $form;
         });
 
-        if ($form?->archived_at !== null) {
+        $notices = $history['notices'];
+        $archived = $form?->archived_at !== null;
+        if ($archived) {
             $attributes['published'] = $attributes['awaiting_theme_publication'] = false;
-            $warnings[] = '新環境でアーカイブされたフォームの公開停止を維持します。';
+            $notices[] = '新環境でアーカイブされたフォームの公開停止を維持します。';
         }
         if ($this->verification) {
-            $currentPath = $form?->published && !$form->archived_at && empty($form->definition['issues'])
-                ? PublicFormUrl::entry('', $form->slug) : null;
+            $currentTheme = $form?->published ? Theme::where('slug', $form->definition['settings']['theme_name'] ?? 'one_column')->first() : null;
+            $currentPath = $form?->hasPublicEntry($currentTheme) ? PublicFormUrl::entry('', $form->slug) : null;
             $state = !$form ? 'missing' : ($form->slug === $attributes['slug'] && $form->name === $attributes['name']
                 && $form->published === $attributes['published'] && $form->awaiting_theme_publication === $attributes['awaiting_theme_publication'] && JsonValue::same($form->definition, $definition) ? 'matched' : 'changed');
             $check = $this->verification->check($id, $form, $state);
             $histories = $check['source']['histories'];
             $attachments = $check['files']['expected'] - $check['files']['source_unavailable'];
         } else {
-            $histories = $attachments = 0;
-            foreach ($this->source->table('histories')->where('form_id', $id)->lazyById(200) as $history) {
-                $histories++;
-                $attachments += $this->history((array) $history, $fields, $form, $warnings);
-            }
+            $histories = $history['count'];
+            $attachments = $history['resolved'];
         }
         return ['legacy_id' => $id, 'form_id' => $this->dryRun && !$this->verification ? null : $form?->id, 'source_url' => (string) $row['url'], 'source_published' => !$orphan && (int) $row['view_flag'] === 1,
-            'url' => PublicFormUrl::entry('', $slug), 'published' => $attributes['published'],
+            'url' => PublicFormUrl::entry('', $slug), 'published' => $attributes['published'], 'archived' => $archived,
+            'awaiting_theme_publication' => $attributes['awaiting_theme_publication'],
             'theme_review' => $converted ? ($pending ? 'pending' : 'reviewed') : ($theme['status'] ?? null),
-            'notices' => $converted ? ["独自テーマ {$theme['source_name']} を {$theme['layout']} として移行。".($pending ? '公開画面で照合してください。' : '照合済みです。')] : [],
+            'notices' => $converted ? [...$notices, "独自テーマ {$theme['source_name']} を {$theme['layout']} として移行。".($pending ? '公開画面で照合してください。' : '照合済みです。')] : $notices,
             ...($this->verification ? ['current_public_path' => $currentPath] : []),
-            'field_count' => count($fields), 'history_count' => $histories, 'resolved_files' => $attachments, 'issues' => $definition['issues'], 'warnings' => $warnings];
+            'field_count' => count($fields), 'history_count' => $histories, 'resolved_files' => $attachments, 'issues' => $definition['issues'],
+            'warnings' => array_values(array_unique([...$warnings, ...$history['warnings'], ...$history['integrity_errors']])),
+            'integrity_errors' => array_values(array_unique([...$fileIntegrity, ...$integrity, ...$history['integrity_errors']]))];
     }
 
     private function sourceUses(string $slug, ?int $except = null): bool
@@ -289,7 +320,7 @@ class Importer
     private const ITEM_KEYS = ['id', 'created_at', 'updated_at', 'view_no', 'form_id', 'form_block_id', 'required', 'real_time_validation', 're_enter_html_id'];
     private const CHOICE_KEYS = ['id', 'created_at', 'updated_at', 'view_no', 'block_id', 'choice_type', 'label_text', 'image', 'delete_flag'];
 
-    private function fields(int $id, array &$issues): array
+    private function fields(int $id, array &$issues, array &$integrity): array
     {
         $items = $this->source->table('form_items')->where('form_id', $id)->orderBy('view_no')->orderBy('id')->get();
         $blocks = $this->source->table('form_blocks')->whereIn('id', $items->pluck('form_block_id'))->get();
@@ -298,7 +329,7 @@ class Importer
         foreach ($items as $item) {
             $block = $definitions[$item->form_block_id] ?? null;
             if (!$block) {
-                $issues[] = "項目定義が見つかりません: form_items #{$item->id}";
+                $issues[] = $integrity[] = "項目定義が見つかりません: form_items #{$item->id}";
                 continue;
             }
             $itemData = $this->knownAttributes((array) $item, self::ITEM_KEYS, 'form_items', $issues);
@@ -405,13 +436,29 @@ class Importer
         return array_intersect_key($record, $keep);
     }
 
-    private function history(array $row, array $fields, ?Form $form, array &$warnings): int
+    private function histories(int $formId, array $fields, ?Form $form): array
     {
-        $import = function () use ($row, $fields, $form, &$warnings) {
-            $query = Submission::where('legacy_id', $row['id']);
-            $submission = ($this->dryRun ? $query : $query->lockForUpdate())->first();
+        $summary = ['count' => 0, 'resolved' => 0, 'warnings' => [], 'integrity_errors' => [], 'notices' => []];
+        $this->source->table('histories')->where('form_id', $formId)->chunkById(200, function ($rows) use ($fields, $form, &$summary) {
+            $receipts = $this->dryRun ? Submission::with('attachments:id,submission_id,name')
+                ->whereIntegerInRaw('legacy_id', $rows->pluck('id'))->get(['id', 'legacy_id', 'retain', 'purged_at'])->keyBy('legacy_id') : null;
+            foreach ($rows as $row) {
+                [$resolved, $warnings, $integrity, $notices] = $this->history((array) $row, $fields, $form, $receipts?->get($row->id));
+                $summary['count']++;
+                $summary['resolved'] += $resolved;
+                array_push($summary['warnings'], ...$warnings);
+                array_push($summary['integrity_errors'], ...$integrity);
+                array_push($summary['notices'], ...$notices);
+            }
+        });
+        return $summary;
+    }
+
+    private function history(array $row, array $fields, ?Form $form, ?Submission $existing): array
+    {
+        $import = function () use ($row, $fields, $form, $existing) {
+            $submission = $this->dryRun ? $existing : Submission::where('legacy_id', $row['id'])->lockForUpdate()->first();
             if ($submission && (!$submission->retain || $submission->purged_at !== null)) {
-                $warnings[] = "履歴 #{$row['id']}: 新環境で消去されたため復元を省きます。";
                 if (!$this->dryRun && (int) $submission->form_id !== (int) $form->id) {
                     // Keep only the ID mapping when the source reassigns an erased history to another form.
                     DB::table('submissions')->where('id', $submission->id)->update(['form_id' => $form->id]);
@@ -419,16 +466,18 @@ class Importer
                 if (!$this->dryRun && $submission->purged_at !== null) {
                     $this->cleanAfterCommit($submission);
                 }
-                return 0;
+                return [0, [], [], ["履歴 #{$row['id']}: 新環境で消去されたため復元を省きます。"]];
             }
+            $links = $this->dryRun ? $submission?->attachments : $submission?->attachments()->orderBy('id')->get();
+            $groups = $links?->groupBy('name') ?? collect();
+            $warnings = $integrity = [];
             $row = $this->knownAttributes($row, HistoryReader::COLUMNS, 'histories', $warnings);
             [$historicalFields, $answers] = $this->reader->answers($row, $fields, $warnings);
-            $groups = $submission?->attachments()->orderBy('id')->get()->groupBy('name') ?? collect();
             $unsafe = 0;
-            $files = $this->reader->files($row, $this->attachmentDirectory, $warnings, $unsafe, $this->version, $groups->keys()->all());
-            $resolved = count(array_filter($files));
+            $files = $this->reader->files($row, $this->attachmentDirectory, $integrity, $unsafe, $this->version, $groups->keys()->all());
+            $result = [count(array_filter($files)), $warnings, $integrity, []];
             if ($this->dryRun) {
-                return $resolved;
+                return $result;
             }
             $submission ??= new Submission(['legacy_id' => $row['id'], 'token' => (string) Str::uuid()]);
             $snapshot = ['legacy_version' => $this->version, 'name' => $row['form_name'], 'legacy_history' => $row, 'definition' => ['fields' => $historicalFields, 'settings' => ['name' => $row['form_name']]]];
@@ -461,7 +510,7 @@ class Importer
                 }
             }
             $this->cleanAfterCommit($submission);
-            return $resolved;
+            return $result;
         };
         return $this->dryRun ? $import() : $this->guard->transaction($import, attempts: 3);
     }

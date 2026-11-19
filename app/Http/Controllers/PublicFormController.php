@@ -27,9 +27,8 @@ class PublicFormController extends Controller
     private function published(Request $request, string $slug): Form
     {
         $form = Form::where('slug', $slug)->where('published', true)->whereNull('archived_at')->firstOrFail();
-        abort_if(!empty($form->definition['issues']), 404);
         $theme = $this->theme($form->definition);
-        abort_if($theme?->pendingReview(), 404);
+        abort_unless($form->hasPublicEntry($theme), 404);
         $form->setRelation('theme', $theme);
         PublicLocale::activate($form->definition['settings']['language'] ?? null);
         PublicAccess::enforce($request, $form->definition['settings'] ?? []);
@@ -182,8 +181,7 @@ class PublicFormController extends Controller
         try {
             DB::transaction(function () use ($form, $draft, $definition, $answers, $tags, $disk, &$copied) {
                 $current = Form::lockForUpdate()->findOrFail($form->id);
-                abort_unless($current->published && !$current->archived_at && $current->revision === $draft['revision'], 409);
-                abort_if($this->theme($current->definition)?->pendingReview(), 409);
+                abort_unless($current->revision === $draft['revision'] && $current->hasPublicEntry($this->theme($current->definition)), 409);
                 if (Submission::where('token', $draft['token'])->exists()) {
                     return;
                 }

@@ -115,9 +115,14 @@ final class StaticThemeMarkup
         }
         $rawClass = $node->getAttribute('class');
         $classes = str_contains($rawClass, $reader->omitted) ? null : SafeMarkup::themeClasses($rawClass);
+        $logoSlot = $node->getAttribute('id') === 'logo' && in_array($tag, SafeMarkup::THEME_FORMATTING, true)
+            && $node->getElementsByTagName('a')->length > 0;
+        if ($logoSlot) {
+            $classes = trim(($classes ?? '').' '.SafeMarkup::LINKED_LOGO_CLASS);
+        }
         $class = $classes === null ? '' : ' class="'.e($classes).'"';
         foreach ($node->attributes as $attr) {
-            if ($attr->name === 'class' && $classes !== null) {
+            if (($attr->name === 'class' && $classes !== null) || ($attr->name === 'id' && $logoSlot)) {
                 continue;
             }
             if (!(($tag === 'img' && in_array($attr->name, ['src', 'alt'], true)) || ($tag === 'a' && $attr->name === 'href'))) {

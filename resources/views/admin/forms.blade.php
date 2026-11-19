@@ -23,7 +23,7 @@
     <td><span @class(['pill', 'good' => $form->published && !$publicThemePending])>{{ $archived ? '保管済み' : ($form->published && !$publicThemePending ? '公開中' : '下書き') }}</span>
     @if($form->draft_definition)<small>未公開の編集あり</small>@endif
     @if($pendingTheme || ($publicThemePending && $form->published))<small class="warn">テーマの照合待ち</small>@endif
-    @if($form->definition['issues'] ?? [])<small class="warn">移行の要確認事項あり</small>@endif</td>
+    @if(($form->definition['issues'] ?? []) || ($form->definition['review_warnings'] ?? []))<small class="warn">移行の要確認事項あり</small>@endif</td>
     <td><a class="text-link" href="{{ route('admin.history', ['form_id' => $form->id]) }}">{{ number_format($form->submissions_count) }} 件</a></td>
     <td><time>{{ $form->updated_at?->format('Y.m.d') }}</time></td>
     <td><div class="actions">@if($archived)

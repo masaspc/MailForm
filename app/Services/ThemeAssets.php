@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Services\ThemeAssets\Stylesheet;
+use App\Services\ThemeAssets\StylesheetReport;
 use App\Services\ThemeAssets\Svg;
 use Illuminate\Support\Facades\Storage;
 use InvalidArgumentException;
@@ -52,7 +53,7 @@ final class ThemeAssets
     }
 
     /** Validate source bytes without touching storage. CSS may reference only images accepted earlier in this import. */
-    public static function prepare(string $path, string $bytes, array $images, array &$warnings): ?array
+    public static function prepare(string $path, string $bytes, array $images, array &$warnings, ?StylesheetReport $cssReport = null): ?array
     {
         $extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
         $location = in_array($extension, ['css', 'svg'], true) ? $path.':1' : $path;
@@ -66,12 +67,11 @@ final class ThemeAssets
             return null;
         }
         if ($mime === 'text/css') {
-            $bytes = Stylesheet::clean($path, $bytes, $images, $warnings);
+            $bytes = Stylesheet::clean($path, $bytes, $images, $warnings, $cssReport);
         } elseif ($mime === 'image/svg+xml') {
-            $removedLine = null;
-            $bytes = Svg::clean($bytes, $removedLine);
-            if ($removedLine !== null) {
-                $warnings[] = "{$path}:{$removedLine} SVG の動的要素・属性または外部参照を除外しました。";
+            $bytes = Svg::clean($bytes, $rejectedLine);
+            if ($rejectedLine !== null) {
+                $location = $path.':'.$rejectedLine;
             }
         } elseif (!self::isRaster($bytes, $mime)) {
             $bytes = null;

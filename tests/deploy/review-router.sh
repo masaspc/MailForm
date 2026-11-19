@@ -31,6 +31,8 @@ for _ in {1..30}; do
     sleep 0.1
 done
 cmp public/assets/admin.css "$runtime/css"
+curl -fsS "$base/assets/themes/base.css" -o "$runtime/base.css"
+cmp public/assets/themes/base.css "$runtime/base.css"
 status() { curl -sS --path-as-is -o /dev/null -w '%{http_code}' "$@"; }
 [[ $(status "$base/admin/themes") == 302 ]]
 curl -fsS -c "$runtime/cookies" "$base/admin/login" > "$runtime/login"

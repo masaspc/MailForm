@@ -9,7 +9,7 @@
 @if($editing)
 <a class="back" href="{{ route('admin.themes') }}">← テーマ一覧</a>
 <header class="head"><h1>{{ $editing->name }}</h1>
-@if($report !== null)<span @class(['pill', 'good' => !$editing->pendingReview()])>{{ $editing->pendingReview() ? '確認待ち' : '確認済み' }}</span>@endif
+@if($report !== null)<span @class(['pill', 'good' => !$editing->pendingReview()])>{{ $editing->pendingReview() ? '照合待ち' : '照合済み' }}</span>@endif
 </header>
 <nav class="anchors" aria-label="テーマ編集セクション"><a href="#settings">表示設定</a>
 @if($editing->exists)<a href="#assets">CSS・画像</a>@endif
@@ -19,7 +19,7 @@
 <div class="table-wrap"><table><thead><tr><th>テーマ名</th><th>識別名</th><th>移行確認</th><th>操作</th></tr></thead>
 <tbody>@foreach($themes as $slug => $name)
 <tr><td>{{ $name }}</td><td>{{ $slug }}</td>
-<td>@if($reviews->has($slug))<span @class(['pill', 'good' => $reviews[$slug] !== null])>{{ $reviews[$slug] ? '確認済み' : '確認待ち' }}</span>@else — @endif</td>
+<td>@if($reviews->has($slug))<span @class(['pill', 'good' => $reviews[$slug] !== null])>{{ $reviews[$slug] ? '照合済み' : '照合待ち' }}</span>@else — @endif</td>
 <td><a class="text-link" href="{{ route('admin.themes.edit', $slug) }}">編集</a></td></tr>
 @endforeach</tbody></table></div>
 @endif
@@ -39,7 +39,7 @@
 <label>ヘッダー<textarea rows="4" name="header">{{ old('header', $editing?->header) }}</textarea></label>
 <label>フッター<textarea rows="4" name="footer">{{ old('footer', $editing?->footer) }}</textarea></label>
 <p>段落・強調・リスト・リンクを使用できます。@if($images)登録画像は <code>&lt;img src="theme:{{ array_key_first($images) }}" alt="画像の説明"&gt;</code> で挿入できます。@endif
-@if($report !== null)表示設定や素材を変更すると、移行テーマは再び確認待ちになります。@else 変更はこのテーマを使うフォームに反映されます。@endif</p>
+@if($report !== null)表示設定や素材を変更すると、移行テーマは再び照合待ちになります。@else 変更はこのテーマを使うフォームに反映されます。@endif</p>
 <div><button type="submit" class="primary">表示設定を保存</button></div>
 </form>
 
@@ -78,7 +78,8 @@
 
 @if($report !== null)
 <section class="panel stack" id="report"><h2>移行時の差分</h2>
-<p>比較した標準テーマは <strong>{{ $layouts[$report['layout']] ?? $report['layout'] }}</strong> です。同じ内容のファイルが {{ number_format($report['score']) }} 件ありました。</p>
+@php($sourceLayout = $report['layout'] ?? $editing->layout)
+<p>比較した標準テーマは <strong>{{ $layouts[$sourceLayout] ?? $sourceLayout }}</strong> です。@isset($report['score'])同じ内容のファイルが {{ number_format($report['score']) }} 件ありました。@endisset</p>
 @foreach(['changed' => '内容を変更', 'added' => '独自に追加', 'removed' => '標準テーマから削除'] as $kind => $label)
 @php($files = $report['changes'][$kind] ?? [])
 <details><summary>{{ $label }}（{{ count($files) }} 件）</summary>

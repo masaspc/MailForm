@@ -221,7 +221,7 @@ final class CustomThemeScanner
         $parts = ['header' => '', 'footer' => ''];
         foreach ($parts as $part => $_) {
             $path = $part.'.blade.php';
-            if (isset($changed[$path])) {
+            if (isset($files[$path])) {
                 $parts[$part] = $markup->partial($path, $this->template($files[$path]));
             }
         }

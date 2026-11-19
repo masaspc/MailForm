@@ -143,7 +143,7 @@ class ThemeManagementTest extends TestCase
             ->assertRedirect($edit)->assertSessionHasErrors('definition');
         $this->assertFalse($form->refresh()->published);
         $this->actingAs($this->user('admin'))->get($adminPreview)->assertOk()->assertSee('お名前');
-        $this->get('/admin')->assertSee($adminPreview);
+        $this->get('/admin')->assertSee($adminPreview)->assertSee('テーマの照合待ち');
         $this->get(route('admin.edit', $form))->assertSee($adminPreview);
     }
 
@@ -160,7 +160,7 @@ class ThemeManagementTest extends TestCase
         $version = $theme->editorVersion();
         $this->actingAs($this->user('editor'))->post($url, ['version' => $version, 'confirmed' => 1])->assertForbidden();
         $this->actingAs($this->user('admin'))->get('/admin/themes/office/edit')->assertOk()
-            ->assertSee('js/office.js')->assertSee('footer.blade.php')->assertSee('css/old.css')->assertSee('画面遷移を確認')
+            ->assertSee('照合待ち')->assertSee('js/office.js')->assertSee('footer.blade.php')->assertSee('css/old.css')->assertSee('画面遷移を確認')
             ->assertSee('余白を照合')->assertSee("/admin/forms/{$form->id}/preview");
         $this->post($url, ['version' => str_repeat('a', 64), 'confirmed' => 1])->assertConflict();
         $this->post($url, ['version' => $version])->assertSessionHasErrors('confirmed');
@@ -169,6 +169,7 @@ class ThemeManagementTest extends TestCase
         $this->get('/contact')->assertOk();
         $this->get('/private')->assertNotFound();
         $this->assertFalse($theme->refresh()->pendingReview());
+        $this->get('/admin/themes')->assertSee('照合済み');
         $this->post(route('admin.unpublish', $form), ['version' => app(FormEditor::class)->version($form->refresh())])->assertSessionHasNoErrors();
         $this->post($url, ['version' => $theme->editorVersion(), 'confirmed' => 1])->assertRedirect();
         $this->assertFalse($form->refresh()->published);

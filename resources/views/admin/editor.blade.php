@@ -76,7 +76,7 @@
 @if($form)
 <section class="panel stack" id="publish"><h2>公開設定</h2>
     @if($pendingTheme)
-    <p>移行テーマの確認待ちです。@if(auth()->user()->role === 'admin')<a class="text-link" href="{{ route('admin.themes.edit', $settings['theme_name'] ?? 'one_column') }}">テーマを確認</a>@endif</p>
+    <p>移行テーマの照合待ちです。@if(auth()->user()->role === 'admin')<a class="text-link" href="{{ route('admin.themes.edit', $settings['theme_name'] ?? 'one_column') }}">テーマを確認</a>@endif</p>
     @else
     <p>保存済みの版を公開します。@if($form->published)現在の公開パスは <a class="text-link" href="{{ $form->publicPath() }}">{{ $form->publicPath() }}</a> です。@endif</p>
     @endif

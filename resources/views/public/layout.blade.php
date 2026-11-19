@@ -15,8 +15,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>@yield('step') | {{ $form->name }}</title>
+@if($stylesheets)
+<link rel="stylesheet" href="{{ \App\Services\PublicFormUrl::asset('themes/base.css') }}">
+@else
 <link rel="stylesheet" href="{{ \App\Services\PublicFormUrl::asset('form.css') }}">
 <link rel="stylesheet" href="{{ \App\Services\PublicFormUrl::asset('themes/stock.css') }}">
+@endif
 @foreach($stylesheets as $path)
 <link rel="stylesheet" href="{{ \App\Services\ThemeAssets::url($theme->slug, $path) }}">
 @endforeach

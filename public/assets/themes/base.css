@@ -1,0 +1,3 @@
+/* Editable theme styles take precedence over MailForm's layout defaults. */
+@import url("../form.css") layer(mailform);
+@import url("stock.css") layer(mailform);

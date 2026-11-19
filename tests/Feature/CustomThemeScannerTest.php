@@ -210,6 +210,23 @@ class CustomThemeScannerTest extends TestCase
         $this->assertStringContainsString('footer.blade.php:5', implode("\n", $scan['warnings']));
     }
 
+    public function test_a_custom_image_in_an_unchanged_header_and_static_layout_footer_are_migrated(): void
+    {
+        $header = '<p><img src="{{ $data->theme_path }}images/mark.svg" alt="Mark">Common heading</p>';
+        $layout = '<html><body><footer><p>Common footer</p></footer></body></html>';
+        $this->writeThemeFile('header.blade.php', $header);
+        $this->writeThemeFile('layout.blade.php', $layout);
+        $this->writeThemeFile('images/mark.svg', '<svg xmlns="http://www.w3.org/2000/svg"><circle cx="2" cy="2" r="1"/></svg>');
+        $scanner = new CustomThemeScanner($this->root, $this->manifest(['gray' => [
+            'header.blade.php' => $header, 'layout.blade.php' => $layout, 'images/mark.svg' => 'stock image bytes',
+        ]]));
+        $result = $scanner->scan('受付.2020');
+        $this->assertSame(['images/mark.svg'], $result['changes']['changed']);
+        $this->assertStringContainsString('Common heading', $result['header']);
+        $this->assertStringContainsString('Common footer', $result['footer']);
+        $this->assertSame('images/mark.svg', $result['logo']);
+    }
+
     public function test_it_reports_changed_or_removed_layout_logic_but_reuses_the_verified_stock_scaffolding(): void
     {
         $old = "<html><body>@yield('content')\n<script>stock();</script>\n</body></html>";

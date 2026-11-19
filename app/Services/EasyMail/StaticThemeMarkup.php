@@ -51,9 +51,6 @@ final class StaticThemeMarkup
                 }
             }
         }
-        if (!$changed) {
-            return $parts;
-        }
         foreach ($stock->behaviorCounts as $hash => $count) {
             if (($reader->behaviorCounts[$hash] ?? 0) < $count) {
                 $reader->warn(1, '標準レイアウトの動作を削除・変更しています。', '', true);

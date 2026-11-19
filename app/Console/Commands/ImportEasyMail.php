@@ -99,7 +99,11 @@ class ImportEasyMail extends Command
                 }
             }
             foreach ($report['forms'] as $form) {
-                $this->line(sprintf('#%d %s %s　項目 %d・履歴 %d・添付照合 %d', $form['legacy_id'], $this->printable($form['url']), $form['published'] ? '公開' : '下書き', $form['field_count'], $form['history_count'], $form['resolved_files']));
+                $status = $form['published'] ? '公開' : '下書き';
+                if ($form['theme_review'] === 'pending') {
+                    $status .= '（テーマ照合待ち）';
+                }
+                $this->line(sprintf('#%d %s %s　項目 %d・履歴 %d・添付照合 %d', $form['legacy_id'], $this->printable($form['url']), $status, $form['field_count'], $form['history_count'], $form['resolved_files']));
                 if ($sourceBase !== null) {
                     $this->line('  旧 '.$this->printable($form['source_entry_url'] ?? '公開入口なし').' → 新 '.$this->printable($form['target_entry_url'] ?? '公開入口なし'));
                 }

@@ -21,7 +21,7 @@ $public = dirname(__DIR__, 2).'/public';
 $static = [
     '/assets/admin.css' => 'text/css', '/assets/admin.js' => 'application/javascript',
     '/assets/form.css' => 'text/css', '/assets/form.js' => 'application/javascript',
-    '/assets/themes/stock.css' => 'text/css',
+    '/assets/themes/stock.css' => 'text/css', '/assets/themes/base.css' => 'text/css',
 ];
 if ($read && isset($static[$path])) {
     header('Content-Type: '.$static[$path]);

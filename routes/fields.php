@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Admin\FieldTemplateController;
+use App\Http\Controllers\Admin\ThemeController;
 use App\Http\Middleware\AdminAccess;
 use Illuminate\Support\Facades\Route;
 
@@ -13,7 +14,9 @@ Route::prefix('admin/fields')->middleware(['auth', AdminAccess::class.':admin,ed
 });
 
 Route::prefix('admin/themes')->middleware(['auth', AdminAccess::class.':admin'])->group(function () {
-    Route::get('/', [\App\Http\Controllers\Admin\ThemeController::class, 'index'])->name('admin.themes');
-    Route::get('/{slug}/edit', [\App\Http\Controllers\Admin\ThemeController::class, 'edit'])->name('admin.themes.edit');
-    Route::post('/', [\App\Http\Controllers\Admin\ThemeController::class, 'save'])->name('admin.themes.save');
+    Route::get('/', [ThemeController::class, 'index'])->name('admin.themes');
+    Route::get('/{slug}/edit', [ThemeController::class, 'edit'])->name('admin.themes.edit');
+    Route::post('/', [ThemeController::class, 'save'])->name('admin.themes.save');
+    Route::post('/{slug}/assets', [ThemeController::class, 'asset'])->name('admin.themes.asset');
+    Route::post('/{slug}/approve', [ThemeController::class, 'approve'])->name('admin.themes.approve');
 });

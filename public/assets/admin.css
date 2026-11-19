@@ -734,3 +734,8 @@ summary:focus-visible {
         white-space: nowrap;
     }
 }
+
+.theme-files {overflow-wrap:anywhere; margin:0; padding-inline-start:1.4rem;}
+.theme-files a[aria-current] {font-weight:700;}
+.theme-code {font-family:ui-monospace, monospace; tab-size:4;}
+.theme-image {display:block; max-width:min(100%, 28rem); max-height:12rem; object-fit:contain;}

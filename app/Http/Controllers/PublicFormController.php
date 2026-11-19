@@ -5,6 +5,8 @@ namespace App\Http\Controllers;
 use App\Models\Attachment;
 use App\Models\Form;
 use App\Models\Submission;
+use App\Models\Theme;
+use App\Services\Admin\FormEditor;
 use App\Services\PublicAccess;
 use App\Services\PublicFields;
 use App\Services\PublicMessage;
@@ -26,9 +28,17 @@ class PublicFormController extends Controller
     {
         $form = Form::where('slug', $slug)->where('published', true)->whereNull('archived_at')->firstOrFail();
         abort_if(!empty($form->definition['issues']), 404);
+        $theme = $this->theme($form->definition);
+        abort_if($theme?->pendingReview(), 404);
+        $form->setRelation('theme', $theme);
         PublicLocale::activate($form->definition['settings']['language'] ?? null);
         PublicAccess::enforce($request, $form->definition['settings'] ?? []);
         return $form;
+    }
+
+    private function theme(array $definition): ?Theme
+    {
+        return Theme::where('slug', $definition['settings']['theme_name'] ?? 'one_column')->first();
     }
 
     private function draft(Request $request, Form $form): array
@@ -46,14 +56,27 @@ class PublicFormController extends Controller
         $request->session()->put('public_drafts.'.$draft['token'], $draft);
     }
 
-    private function input(Form $form, array $draft, ?MessageBag $problems = null)
+    private function input(Form $form, array $draft, ?MessageBag $problems = null, bool $preview = false)
     {
         $definition = $form->definition;
         $controls = $this->fields->controls($definition['fields'], $definition['source_version'] ?? null);
         return response()->view('public.input', [
             'form' => $form, 'draft' => $draft, 'controls' => collect($controls)->groupBy('field'),
-            'problems' => $problems ?? new MessageBag(),
+            'problems' => $problems ?? new MessageBag(), 'preview' => $preview, 'controlIds' => array_column($controls, 'id'),
         ], $problems ? 422 : 200)->header('Cache-Control', 'no-store');
+    }
+
+    public function preview(Request $request, Form $form, FormEditor $editor)
+    {
+        abort_if($form->archived_at, 404);
+        $definition = $request->query('version') === 'current' ? $form->definition : $editor->draft($form);
+        $theme = $this->theme($definition);
+        abort_if($theme?->pendingReview() && $request->user()->role !== 'admin', 403);
+        $form->setRelation('theme', $theme);
+        $form->definition = $definition;
+        $form->name = $definition['settings']['name'] ?? $form->name;
+        PublicLocale::activate($definition['settings']['language'] ?? null);
+        return $this->input($form, ['values' => [], 'files' => []], preview: true);
     }
 
     public function show(Request $request, string $slug = '')
@@ -160,6 +183,7 @@ class PublicFormController extends Controller
             DB::transaction(function () use ($form, $draft, $definition, $answers, $tags, $disk, &$copied) {
                 $current = Form::lockForUpdate()->findOrFail($form->id);
                 abort_unless($current->published && !$current->archived_at && $current->revision === $draft['revision'], 409);
+                abort_if($this->theme($current->definition)?->pendingReview(), 409);
                 if (Submission::where('token', $draft['token'])->exists()) {
                     return;
                 }

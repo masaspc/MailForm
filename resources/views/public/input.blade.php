@@ -13,14 +13,19 @@
 @if($intro = ($settings[($hasErrors ? 'error' : 'input').'_form_header_message'] ?? ''))
 <p class="message">{{ \App\Services\SafeMarkup::render($intro) }}</p>
 @endif
+@if($preview)
+<p class="message" role="status">管理者プレビューです。回答は送信できません。 <a href="{{ route('admin.edit', $form) }}">フォーム編集に戻る</a></p>
+<form method="dialog">
+@else
 <form method="post" action="{{ $form->publicPath('confirm') }}" enctype="multipart/form-data" data-entry data-messages="{{ json_encode(\App\Services\PublicLocale::browserMessages(), JSON_UNESCAPED_UNICODE) }}" data-warn="{{ (int)($settings['beforeunload_flag'] ?? 0) }}" data-no-enter="{{ (int)($settings['enter_forbidden_flag'] ?? 0) }}">
 @csrf
 <input type="hidden" name="receipt_token" value="{{ $draft['token'] }}">
+@endif
 @foreach($controls as $group)
 @php
     $field = $group->first()['source'];
 @endphp
-<fieldset data-kind="{{ $field['form_type'] }}" data-kana="{{ $field['restriction'] ?? '' }}">
+<fieldset data-kind="{{ $field['form_type'] }}" data-kana="{{ $field['restriction'] ?? '' }}" @disabled($preview)>
 <legend>{{ $field['title'] }} @if(!empty($field['required']))<small>{{ __('必須') }}</small>@endif</legend>
 @if(!empty($field['description_above']))<p class="hint">{{ \App\Services\SafeMarkup::render($field['description_above']) }}</p>@endif
 @foreach($group as $control)
@@ -73,6 +78,6 @@
 @if($outro = ($settings[($hasErrors ? 'error' : 'input').'_form_footer_message'] ?? ''))
 <p class="message">{{ \App\Services\SafeMarkup::render($outro) }}</p>
 @endif
-<button class="primary" type="submit">{{ __('入力内容を確認する') }}</button>
+<button class="primary" type="submit" @disabled($preview)>{{ __('入力内容を確認する') }}</button>
 </form>
 @endsection

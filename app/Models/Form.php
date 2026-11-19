@@ -8,12 +8,13 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Form extends Model
 {
-    protected $fillable = ['legacy_id', 'slug', 'name', 'published', 'revision', 'definition', 'draft_definition'];
+    protected $fillable = ['legacy_id', 'slug', 'name', 'published', 'revision', 'definition', 'draft_definition', 'awaiting_theme_publication'];
 
     protected function casts(): array
     {
         return [
             'published' => 'boolean',
+            'awaiting_theme_publication' => 'boolean',
             'revision' => 'integer',
             'definition' => 'array',
             'draft_definition' => 'array',

@@ -59,7 +59,7 @@ class PublicFormUrl
 
     private static function configuredPath(): string
     {
-        return rtrim((string) parse_url(config('app.url'), PHP_URL_PATH), '/');
+        return rtrim((string) parse_url(self::encodeInstallationPath((string) config('app.url')), PHP_URL_PATH), '/');
     }
 
     private static function basePath(): string

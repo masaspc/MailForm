@@ -4,6 +4,7 @@ use App\Http\Controllers\Admin\FormController;
 use App\Http\Controllers\Admin\HistoryController;
 use App\Http\Controllers\Admin\SessionController;
 use App\Http\Controllers\Admin\UserController;
+use App\Http\Controllers\PublicFormController;
 use App\Http\Middleware\AdminAccess;
 use Illuminate\Support\Facades\Route;
 
@@ -22,6 +23,7 @@ Route::prefix('admin')->group(function () {
         });
         Route::middleware(AdminAccess::class.':admin,editor')->group(function () {
             Route::get('forms/new', [FormController::class, 'create'])->name('create');
+            Route::get('forms/{form}/preview', [PublicFormController::class, 'preview'])->name('preview');
             Route::post('forms', [FormController::class, 'store'])->name('store');
             Route::get('forms/{form}/edit', [FormController::class, 'edit'])->name('edit');
             Route::put('forms/{form}', [FormController::class, 'update'])->name('update');

@@ -5,17 +5,23 @@ umask 077
 
 usage() {
     cat <<'HELP'
-使い方  sudo bash MailForm/deploy/almalinux10/import-backup.sh /srv/mailform-import/複製名/backup.sql /srv/mailform-import/複製名/EasyMail
+使い方  sudo bash MailForm/deploy/almalinux10/import-backup.sh [--overwrite-themes] /srv/mailform-import/複製名/backup.sql /srv/mailform-import/複製名/EasyMail
 setup.sh で準備した新サーバーで、旧サイトの単一DBのSQLと同時点のファイル複製を指定します。
 練習では練習DBに、本番準備後は受付・配信を止めた本番DBに取り込みます。
+独自テーマの手直しは既定で保持します。バックアップの内容で置き換える場合だけ --overwrite-themes を指定します。
 コピーするファイル、所有者、権限は docs/IMPORT.md を確認してください。
 HELP
 }
 die() { printf '%s\n' "$*" >&2; exit 1; }
 
 if [[ $# == 1 && ( $1 == --help || $1 == -h ) ]]; then usage; exit 0; fi
+theme_options=()
+if [[ ${1:-} == --overwrite-themes ]]; then theme_options+=(--overwrite-themes); shift; fi
 [[ $# == 2 ]] || { usage >&2; exit 2; }
 [[ $EUID == 0 ]] || die '新サーバーで sudo bash を使ってください。'
+helper_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+# A protected caller's home is not searchable by the unprivileged restore accounts.
+cd /
 exec 9>>/run/mailform-setup.lock
 flock -n 9 || die '別の設置または取込が進行中です。終了後に再実行してください。'
 
@@ -58,7 +64,6 @@ fi
 socket=/var/lib/mysql/mysql.sock
 admin=(mariadb --no-defaults --protocol=socket --socket="$socket" --user=root --batch)
 app=(runuser -u mailform -- env -i PATH="$PATH" HOME=/nonexistent)
-helper_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 cd /srv/mailform/current
 target_fingerprint() { "$@" php -- "$target" "$socket" "$base_url" < "$helper_dir/target.php"; }
 cached_before=$(target_fingerprint "${app[@]}")
@@ -116,7 +121,7 @@ if ! runuser -u "$writer" -- env -i PATH="$PATH" HOME=/nonexistent LC_ALL=C \
     < "$dump" > "$record/restore.log" 2>&1; then
     die "SQLの復元を停止しました。単一DBのエクスポートと管理者用の記録 $record/restore.log を確認してください。"
 fi
-if grep -Eq '^Warning \(Code [0-9]+\)' "$record/restore.log"; then
+if ! LC_ALL=C awk -f "$helper_dir/restore-warnings.awk" "$record/restore.log"; then
     die "SQL復元時に警告がありました。管理者用の記録 $record/restore.log を確認してください。"
 fi
 release_writer
@@ -124,11 +129,12 @@ release_writer
 db_reader=1
 "${admin[@]}" -e "GRANT SELECT ON $schema.* TO '$reader'@'localhost'"
 
-import=("${import_app[@]}" php artisan easymail:import --strict "--source-base=$base_url" "--source-root=$source_root")
+import=("${import_app[@]}" php artisan easymail:import --strict "${theme_options[@]}" "--source-base=$base_url" "--source-root=$source_root")
 "${import[@]}" --dry-run
 "${import[@]}"
 verify_status=0
 "${import[@]}" --verify-only --json > "$record/verify.json" || verify_status=$?
+review_status=0
 # shellcheck disable=SC2016 # The variables below belong to PHP.
 "${app[@]}" php -r '
 $r = json_decode(stream_get_contents(STDIN), true);
@@ -141,16 +147,27 @@ foreach ($r["reconciliation"]["forms"] as $f) {
         $f["legacy_id"] ?? "―", $f["source"]["histories"], $f["source"]["matched"], $f["source"]["changed"],
         $f["source"]["missing"], $f["files"]["verified"], $f["files"]["expected"]);
 }
+$waiting = false;
 foreach ($r["forms"] as $f) {
     if ($argv[1] === "production-ready" && $f["source_published"] && $f["same_public_url"] !== true) {
+        if ($f["theme_review"] === "pending" && !$f["issues"] && $f["source_entry_url"] === $f["planned_entry_url"]) {
+            printf("旧フォーム #%d はテーマ照合待ちです。\n", $f["legacy_id"]);
+            $waiting = true;
+            continue;
+        }
         fprintf(STDERR, "旧フォーム #%d の公開URLが一致しません。\n", $f["legacy_id"]); exit(2);
     }
 }
-exit(($r["reconciliation"]["ok"] ?? false) === true ? 0 : 2);
-' "$phase" < "$record/verify.json"
+exit(($r["reconciliation"]["ok"] ?? false) === true ? ($waiting ? 3 : 0) : 2);
+' "$phase" < "$record/verify.json" || review_status=$?
+(( review_status == 0 || review_status == 3 )) || exit "$review_status"
 (( verify_status == 0 )) || exit "$verify_status"
 "${admin[@]}" -e "DROP USER '$reader'@'localhost'"
 db_reader=0
+if (( review_status == 3 )); then
+    printf '取込とデータ照合は完了しました。本番の受付は停止中です。\nsudo bash MailForm/deploy/almalinux10/setup.sh review-themes で照合し、同じバックアップを既定の保持モードでもう一度取り込んでください。記録 %s/verify.json\n' "$record"
+    exit 0
+fi
 if [[ $phase == production-ready ]]; then
     [[ -f /etc/nginx/mailform/maintenance ]] || die '本番の受付停止を確認してください。'
     "${app[@]}" php artisan mailform:handoff --require-empty

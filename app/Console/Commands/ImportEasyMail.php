@@ -21,7 +21,8 @@ class ImportEasyMail extends Command
         {--attachments= : 旧 storage/app/attach_file の場所を指定}
         {--form= : 旧フォームIDを指定}
         {--json : 診断結果をJSONで出力}
-        {--strict : 公開保留または照合警告がある場合は終了コード2を返す}';
+        {--overwrite-themes : 管理画面でのテーマの手直しをバックアップの内容で上書きする}
+        {--strict : 移行を妨げる問題・照合警告で終了コード2。独自テーマの目視照合待ちのみなら継続}';
 
     protected $description = 'EasyMail の複製DBからフォーム・受信履歴・添付を移行する';
 
@@ -46,7 +47,7 @@ class ImportEasyMail extends Command
             if ($id !== null && (filter_var($id, FILTER_VALIDATE_INT) === false || (int) $id < 1)) {
                 throw new RuntimeException('--form には旧フォームの正の整数IDを指定してください。');
             }
-            $report = $importer->run($release, $attachments, $id === null ? null : (int) $id, (bool) $this->option('dry-run'), (bool) $this->option('verify-only'));
+            $report = $importer->run($release, $attachments, $id === null ? null : (int) $id, (bool) $this->option('dry-run'), (bool) $this->option('verify-only'), (bool) $this->option('overwrite-themes'));
             if ($sourceBase !== null) {
                 foreach ($report['forms'] as $key => $form) {
                     $source = $form['source_published'] && PublicFormUrl::isSegment($form['source_url'])
@@ -55,6 +56,7 @@ class ImportEasyMail extends Command
                     $target = $targetPath === null ? null : $targetBase.$targetPath;
                     $report['forms'][$key] += [
                         'source_entry_url' => $source, 'target_entry_url' => $target,
+                        'planned_entry_url' => $targetBase.$form['url'],
                         'same_public_url' => $source === null ? null : $source === $target,
                     ];
                 }
@@ -85,12 +87,23 @@ class ImportEasyMail extends Command
             foreach ($report['plugins'] as $plugin) {
                 $this->line('プラグイン '. $this->printable(($plugin['name'] ?: $plugin['uid']).' '. $plugin['version']).($plugin['active_flag'] ? '（有効）' : '（無効）'));
             }
+            foreach ($report['themes'] as $name => $theme) {
+                $this->line('独自テーマ '.$this->printable((string) $name).'　元テーマ '.$this->printable($theme['layout'] ?? '推定できません'));
+                foreach (['changed' => '変更', 'added' => '追加', 'removed' => '削除'] as $key => $label) {
+                    foreach ($theme['changes'][$key] as $path) {
+                        $this->line('  '.$label.' '.$this->printable($path));
+                    }
+                }
+                foreach ([...$theme['behaviors'], ...$theme['warnings'], ...$theme['errors'], ...$theme['integrity']] as $notice) {
+                    $this->warn('  '.$this->printable($notice));
+                }
+            }
             foreach ($report['forms'] as $form) {
                 $this->line(sprintf('#%d %s %s　項目 %d・履歴 %d・添付照合 %d', $form['legacy_id'], $this->printable($form['url']), $form['published'] ? '公開' : '下書き', $form['field_count'], $form['history_count'], $form['resolved_files']));
                 if ($sourceBase !== null) {
                     $this->line('  旧 '.$this->printable($form['source_entry_url'] ?? '公開入口なし').' → 新 '.$this->printable($form['target_entry_url'] ?? '公開入口なし'));
                 }
-                foreach (array_merge($form['issues'], $form['warnings']) as $issue) {
+                foreach (array_merge($form['issues'], $form['warnings'], $form['notices']) as $issue) {
                     $this->warn('  '.$this->printable($issue));
                 }
             }

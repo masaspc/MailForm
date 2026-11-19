@@ -213,13 +213,10 @@ core_label() {
     fi
 }
 
-core_initialize_app() {
-    local phase=$1 shared=/srv/mailform/shared cache="$release/bootstrap/cache"
+core_migrate_app() {
+    local shared=/srv/mailform/shared cache="$release/bootstrap/cache"
     [[ ! -L $shared && ! -L $shared/storage && ! -L $release/bootstrap && ! -L $cache ]] ||
         core_error '共有領域またはキャッシュへのシンボリックリンクを確認してください。'
-    install -d -o root -g mailform -m 0750 "$shared"
-    core_environment "$phase" "$shared"
-    core_database "$phase"
     install -d -o mailform -g mailform -m 0700 "$shared/storage" "$cache"
     sudo -Hu mailform bash -ceu 'umask 077; cd "$1"; mkdir -p app/private framework/{cache/data,cache/locks,sessions,testing,views} logs' -- "$shared/storage"
     core_label /srv/mailform '/srv/mailform(/.*)?' httpd_sys_content_t
@@ -237,6 +234,15 @@ php artisan migrate --force --no-interaction
 php artisan config:cache --no-interaction
 php artisan mailform:check --expect-paused
 ARTISAN
+}
+
+core_initialize_app() {
+    local phase=$1 shared=/srv/mailform/shared
+    [[ ! -L $shared ]] || core_error '共有領域へのシンボリックリンクを確認してください。'
+    install -d -o root -g mailform -m 0750 "$shared"
+    core_environment "$phase" "$shared"
+    core_database "$phase"
+    core_migrate_app
 }
 
 provision_stage() (

@@ -5,6 +5,7 @@ namespace App\Services\EasyMail;
 use App\Models\FieldTemplate;
 use App\Models\Form;
 use App\Models\Submission;
+use App\Models\Theme;
 use App\Services\PublicFormUrl;
 use Illuminate\Database\Connection;
 use Illuminate\Support\Collection;
@@ -21,20 +22,21 @@ class Importer
     private bool $dryRun;
     private string $version;
     private array $sharedIssues;
+    private array $themes;
     private bool $hasSourceFiles;
     private ?Reconciliation $verification;
 
     public function __construct(private FormAudit $audit, private HistoryReader $reader, private ImportGuard $guard) {}
 
-    public function run(SourceRelease $release, ?string $attachments, ?int $formId, bool $dryRun, bool $verifyOnly = false): array
+    public function run(SourceRelease $release, ?string $attachments, ?int $formId, bool $dryRun, bool $verifyOnly = false, bool $overwriteThemes = false): array
     {
         $this->source = DB::connection('legacy');
         $this->dryRun = $dryRun || $verifyOnly;
         $this->verification = $verifyOnly ? new Reconciliation($this->source, $this->reader, $attachments, $release->version) : null;
-        return $this->guard->run($this->source, DB::connection(), fn () => $this->process($release, $attachments, $formId));
+        return $this->guard->run($this->source, DB::connection(), fn () => $this->process($release, $attachments, $formId, $overwriteThemes));
     }
 
-    private function process(SourceRelease $release, ?string $attachments, ?int $formId): array
+    private function process(SourceRelease $release, ?string $attachments, ?int $formId, bool $overwriteThemes): array
     {
         $root = $release->root;
         $this->version = $release->version;
@@ -83,6 +85,20 @@ class Importer
             $report['warnings'][] = '標準構成に含まれないテーブルがあります。プラグインの残枠・連番などは個別に照合してください。';
         }
 
+        $this->themes = [];
+        $scanner = $this->installation->customThemes();
+        $onlyTheme = $formId === null ? null : $this->source->table('forms')->where('id', $formId)->value('theme_name');
+        $imports = new ImportedThemes($this->guard);
+        $themeNames = $scanner?->names() ?? [];
+        $spellings = array_count_values(array_map('strtolower', $themeNames));
+        foreach ($themeNames as $name) {
+            if ($formId !== null && $name !== $onlyTheme) {
+                continue;
+            }
+            $this->themes[$name] = $imports->sync($name, $this->version, $scanner->scan($name),
+                $this->dryRun, $this->verification !== null, $overwriteThemes, $spellings[strtolower($name)] > 1);
+        }
+        $report['themes'] = $this->themes;
         $forms = $this->source->table('forms')->when($formId !== null, fn ($q) => $q->where('id', $formId))->lazyById(100);
         $histories = $this->source->table('histories')->when($formId !== null, fn ($q) => $q->where('form_id', $formId));
         $unassigned = (clone $histories)->where(fn ($q) => $q->whereNull('form_id')->orWhere('form_id', '<=', 0))->orderBy('id')->value('id');
@@ -113,6 +129,9 @@ class Importer
         $report['warnings'] = array_values(array_unique($report['warnings']));
         if ($this->verification) {
             $report['reconciliation'] = $this->verification->finish($formId);
+            if (array_filter(array_column($this->themes, 'integrity'))) {
+                $report['reconciliation']['ok'] = false;
+            }
         }
         return $report;
     }
@@ -122,7 +141,8 @@ class Importer
         $removed = Form::whereNotNull('legacy_id')->whereIntegerNotInRaw('legacy_id', $present)->orderBy('legacy_id')->pluck('legacy_id')->all();
         if (!$this->dryRun) {
             foreach (array_chunk($removed, 200) as $ids) {
-                $this->guard->transaction(fn () => Form::whereIn('legacy_id', $ids)->where('published', true)->update(['published' => false]));
+                $this->guard->transaction(fn () => Form::whereIn('legacy_id', $ids)->where(fn ($q) => $q->where('published', true)->orWhere('awaiting_theme_publication', true))
+                    ->update(['published' => false, 'awaiting_theme_publication' => false]));
             }
         }
         return $removed;
@@ -141,12 +161,17 @@ class Importer
         $issues = array_merge($issues, $fileIssues);
         $warnings = [];
         $validationIssues = [];
+        $theme = $this->themes[$row['theme_name'] ?? ''] ?? null;
+        $converted = $theme && $theme['status'] !== 'blocked';
         $fields = [];
         if ($orphan) {
             $issues[] = '旧フォーム定義が削除されています。履歴保管用フォームを作成します。';
         } else {
             $fields = $this->fields($id, $issues);
-            $themeIssues = $this->installation->forForm((string) $row['theme_name'], $slug, ($row['language'] ?? '') ?: 'ja');
+            $themeIssues = $this->installation->forForm((string) $row['theme_name'], $slug, ($row['language'] ?? '') ?: 'ja', (bool) $converted);
+            if ($theme) {
+                array_push($themeIssues, ...$theme['errors'], ...$theme['integrity']);
+            }
             if ($this->hasSourceFiles) {
                 $fileIssues = array_merge($fileIssues, $themeIssues);
             }
@@ -175,6 +200,9 @@ class Importer
             $settings['recaptcha_enabled'] = 1;
         }
         unset($settings['google_re_captcha_secret_key'], $settings['google_re_captcha_site_key']);
+        if ($converted) {
+            $settings['theme_name'] = $theme['slug'];
+        }
         $installationIssues = array_values(array_unique($issues));
         $issues = array_values(array_unique([...$installationIssues, ...$validationIssues]));
         $definition = [
@@ -182,18 +210,26 @@ class Importer
             'source_file_issues' => $fileIssues, 'installation_issues' => $installationIssues, 'validation_issues' => $validationIssues,
         ];
         $name = (string) ($row['name'] ?: "旧フォーム #{$id}");
-        $attributes = ['slug' => $slug, 'name' => mb_substr($name, 0, 255), 'published' => (int) $row['view_flag'] === 1 && !$issues, 'definition' => $definition];
+        $eligible = (int) $row['view_flag'] === 1 && !$issues;
+        $pending = $converted && $theme['status'] === 'pending';
+        $attributes = ['slug' => $slug, 'name' => mb_substr($name, 0, 255), 'published' => $eligible && !$pending,
+            'awaiting_theme_publication' => $eligible && $pending, 'definition' => $definition];
 
-        $form = $this->dryRun ? Form::where('legacy_id', $id)->first() : $this->guard->transaction(function () use ($id, $attributes, $definition) {
+        $form = $this->dryRun ? Form::where('legacy_id', $id)->first() : $this->guard->transaction(function () use ($id, &$attributes, $definition, $converted, $theme, $eligible, &$pending) {
+            if ($converted) {
+                $pending = Theme::where('slug', $theme['slug'])->lockForUpdate()->firstOrFail()->pendingReview();
+                $attributes['published'] = $eligible && !$pending;
+                $attributes['awaiting_theme_publication'] = $eligible && $pending;
+            }
             $form = Form::where('legacy_id', $id)->lockForUpdate()->first() ?? new Form(['legacy_id' => $id]);
-            $changed = !$form->exists || !$this->sameJson($form->definition, $definition);
+            $changed = !$form->exists || !JsonValue::same($form->definition, $definition);
             if ($changed) {
                 $form->revision = ($form->revision ?? 0) + 1;
             } else {
                 unset($attributes['definition']);
             }
             if ($form->archived_at !== null) {
-                $attributes['published'] = false;
+                $attributes['published'] = $attributes['awaiting_theme_publication'] = false;
             }
             $form->fill($attributes);
             if ($form->isDirty()) {
@@ -206,14 +242,14 @@ class Importer
         });
 
         if ($form?->archived_at !== null) {
-            $attributes['published'] = false;
+            $attributes['published'] = $attributes['awaiting_theme_publication'] = false;
             $warnings[] = '新環境でアーカイブされたフォームの公開停止を維持します。';
         }
         if ($this->verification) {
             $currentPath = $form?->published && !$form->archived_at && empty($form->definition['issues'])
                 ? PublicFormUrl::entry('', $form->slug) : null;
             $state = !$form ? 'missing' : ($form->slug === $attributes['slug'] && $form->name === $attributes['name']
-                && $form->published === $attributes['published'] && $this->sameJson($form->definition, $definition) ? 'matched' : 'changed');
+                && $form->published === $attributes['published'] && $form->awaiting_theme_publication === $attributes['awaiting_theme_publication'] && JsonValue::same($form->definition, $definition) ? 'matched' : 'changed');
             $check = $this->verification->check($id, $form, $state);
             $histories = $check['source']['histories'];
             $attachments = $check['files']['expected'] - $check['files']['source_unavailable'];
@@ -226,6 +262,8 @@ class Importer
         }
         return ['legacy_id' => $id, 'form_id' => $this->dryRun && !$this->verification ? null : $form?->id, 'source_url' => (string) $row['url'], 'source_published' => !$orphan && (int) $row['view_flag'] === 1,
             'url' => PublicFormUrl::entry('', $slug), 'published' => $attributes['published'],
+            'theme_review' => $converted ? ($pending ? 'pending' : 'reviewed') : ($theme['status'] ?? null),
+            'notices' => $converted ? ["独自テーマ {$theme['source_name']} を {$theme['layout']} として移行。".($pending ? '公開画面で照合してください。' : '照合済みです。')] : [],
             ...($this->verification ? ['current_public_path' => $currentPath] : []),
             'field_count' => count($fields), 'history_count' => $histories, 'resolved_files' => $attachments, 'issues' => $definition['issues'], 'warnings' => $warnings];
     }
@@ -323,7 +361,7 @@ class Importer
                     continue;
                 }
                 $template = FieldTemplate::where('legacy_id', $id)->first();
-                if (($template && $this->sameJson($template->definition, $field)) || (!$template && $same)) {
+                if (($template && JsonValue::same($template->definition, $field)) || (!$template && $same)) {
                     continue;
                 }
                 $this->guard->transaction(fn () => ($template ?? new FieldTemplate(['legacy_id' => $id]))->fill(['definition' => $field])->save());
@@ -333,21 +371,6 @@ class Importer
     }
 
     /** MySQL JSON can reorder object keys. Form field order and scalar values remain significant. */
-    private function sameJson(mixed $left, mixed $right): bool
-    {
-        if ($left === $right) {
-            return true;
-        }
-        if (!is_array($left) || !is_array($right) || count($left) !== count($right) || array_is_list($left) !== array_is_list($right)) {
-            return false;
-        }
-        foreach ($left as $key => $value) {
-            if (!array_key_exists($key, $right) || !$this->sameJson($value, $right[$key])) {
-                return false;
-            }
-        }
-        return true;
-    }
 
     /** Shipped definitions omit empty metadata and generated DB columns. */
     private function comparable(array $field): array

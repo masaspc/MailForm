@@ -22,6 +22,13 @@ sudo bash MailForm/deploy/almalinux10/setup.sh
 
 すでに `git clone` を終え、これから初回の設置を行う方は、取得したフォルダーの親で `git -C MailForm pull --ff-only origin main` を実行してから上の3行目へ進んでください。2.00.125・2.00.124 の旧サイトからも直接取り込めます。[この2版での移行](IMPORT.md#easymail-200125)
 
+**旧版のMailFormで練習用管理画面まで設置済みの場合**は、新サーバーの `MailForm` フォルダーの親で次を順に実行します。練習DBを退避して新しい版へ更新し、既存の管理者・練習データを使って取込をやり直せます。
+
+```bash
+git -C MailForm pull --ff-only origin main
+sudo bash MailForm/deploy/almalinux10/setup.sh update-preview
+```
+
 聞かれるのは **旧設置URL、新しい管理者メールアドレス、パスワード（12文字以上、確認入力あり）** です。PHP・MariaDB・nginx、暗号鍵、非公開の添付領域、定期処理は自動で設定されます。「練習環境の準備ができました」と表示されたら、お手元の PC で次を実行します。接続先は普段の SSH と同じものに置き換えてください。
 
 ```bash
@@ -40,12 +47,22 @@ sudo bash MailForm/deploy/almalinux10/import-backup.sh /srv/mailform-import/firs
 
 フォーム・履歴・添付の照合結果を確認し、管理画面から代表フォームを開いて「入力 → 確認 → 完了」を試します。練習中は旧URLのドメイン部分が `127.0.0.1:8008` になります。紙の案内や QR コードで使っている URL は本番の最終取込でも照合します。
 
+### 「独自テーマの照合待ち」が出たとき
+
+取込は完了しています。練習用管理画面で **「テーマ管理」→ 対象テーマの「編集」→「プレビューと公開」** と進み、プレビューを旧サイトと並べてください。「移行時の差分」で独自のJavaScriptやメールテンプレートの変更を確認し、「CSS・画像」やヘッダー・フッターで見た目を調整できます。確認欄にチェックして **「確認を完了して対象フォームを公開」** を押すと、旧側で公開していた対象フォームを練習用URLで試せます。[テーマ別の診断と再取込](IMPORT.md#custom-themes)
+
 ## 切替当日
 
-1. **旧サイトが受付中のうちに**、公開ドメインの HTTPS 証明書と秘密鍵を新サーバーへ用意し、`sudo bash MailForm/deploy/almalinux10/setup.sh production` を実行します。証明書のパスと本番の管理者を入力します。練習用の DB・鍵・添付は退避され、本番は空の DB で受付と配信を停止して待機します。[証明書を用意する方法](ALMALINUX10-MANUAL.md#tls)
+1. **旧サイトが受付中のうちに**、公開ドメインの HTTPS 証明書と秘密鍵を新サーバーへ用意し、`sudo bash MailForm/deploy/almalinux10/setup.sh production` を実行します。証明書のパスと本番の管理者を入力します。練習用の DB・鍵・添付は退避されます。本番には移行したテーマの手直しと照合状態を引き継ぎ、フォーム・受信履歴・配信は空の状態で待機します。[証明書を用意する方法](ALMALINUX10-MANUAL.md#tls)
 2. **旧フォームの受付・編集を止めて**、処理中の受付・メールが終わったら DB と添付の最終コピーを `final` に用意します。手順3のコマンドの `first` を **2か所とも** `final` に替えて実行し、旧URL、フォーム別件数、添付の一致を確認します。新本番の DB・設定・添付も保全します。[受付停止と最終取込](CUTOVER.md#4-受付停止と最終取込)
 3. `sudoedit /srv/mailform/shared/.env` で契約先の SMTP を設定します。`MAIL_MAILER=smtp`、`MAIL_HOST`、`MAIL_PORT`、`MAIL_SCHEME`、`MAIL_USERNAME`、`MAIL_PASSWORD`、`MAIL_FROM_ADDRESS` を契約内容に合わせ、`MAILFORM_DELIVERY_ENABLED=false` のまま保存します。切替の準備が整ったら `sudo bash MailForm/deploy/almalinux10/setup.sh open` を実行します。最終照合の記録・新規受付0件・SMTP接続を確認してから、受付と毎分のメール配信を開始します。
 4. VPS・OS 側で HTTPS（443/tcp）を許可し、**旧URLの受付先を新サーバーに切り替えます**。専用ドメインなら DNS の A/AAAA、同じドメインの一部なら既存プロキシでフォームのパスだけ切り替えます。お手元の通常のブラウザーから旧URLを開き、テスト受付1件、履歴、通知・自動返信の到着まで確認します。[公開手順・切り戻し](CUTOVER.md#5-現行urlで受付を開始する)
+
+**最終取込で旧公開フォームに「テーマ照合待ち」が残った場合**は、公開先を切り替える前に次を行います。
+
+1. 新サーバーで `sudo bash MailForm/deploy/almalinux10/setup.sh review-themes` を実行し、そのSSH接続を開いたままにします。
+2. 手元のPCの別の端末から手順2と同じSSHトンネルを開き、`http://127.0.0.1:8008/admin/themes` に本番用管理者でログインします。この専用画面のURLはサブディレクトリ設置の場合も共通です。テーマを照合してから、新サーバー側の専用画面を起動した端末で Ctrl+C を押します。
+3. 同じ `final` の取込コマンドを通常の保持モードで再実行します。旧URLの一致を確認し、切替当日の手順3へ戻ります。公開側の受付とメール配信はこの照合中も停止しています。
 
 ## 運用を引き継ぐ方へ
 

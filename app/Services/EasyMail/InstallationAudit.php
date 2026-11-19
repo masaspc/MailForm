@@ -31,15 +31,20 @@ class InstallationAudit
         return $this->coreIssues ??= $this->differences(array_filter($this->manifest, fn ($path) => !str_starts_with($path, 'resources/'), ARRAY_FILTER_USE_KEY));
     }
 
-    public function forForm(string $theme, string $slug, string $language): array
+    public function customThemes(): ?CustomThemeScanner
     {
-        if (!in_array($theme, ['gray', 'gradation', 'one_column', 'two_column01', 'two_column02'], true)) {
+        return $this->root === null ? null : new CustomThemeScanner($this->root, $this->manifest);
+    }
+
+    public function forForm(string $theme, string $slug, string $language, bool $converted = false): array
+    {
+        if (!$converted && !in_array($theme, ['gray', 'gradation', 'one_column', 'two_column01', 'two_column02'], true)) {
             return ["未対応のテーマ: {$theme}"];
         }
         if ($this->root === null) {
             return [];
         }
-        if (!isset($this->themeIssues[$theme])) {
+        if (!$converted && !isset($this->themeIssues[$theme])) {
             $prefix = "resources/views/theme/{$theme}/";
             $files = array_filter($this->manifest, fn ($path) => str_starts_with($path, $prefix), ARRAY_FILTER_USE_KEY);
             $issues = $this->differences($files);
@@ -56,7 +61,7 @@ class InstallationAudit
             $this->themeIssues[$theme] = $issues;
         }
 
-        $issues = $this->themeIssues[$theme];
+        $issues = $converted ? [] : $this->themeIssues[$theme];
         if (in_array($language, ['ja', 'en', 'cn'], true)) {
             $prefix = "resources/lang/{$language}/";
             array_push($issues, ...$this->differences(array_filter($this->manifest, fn ($path) => str_starts_with($path, $prefix), ARRAY_FILTER_USE_KEY)));

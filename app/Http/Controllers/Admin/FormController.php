@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Models\Form;
+use App\Models\Theme;
 use App\Services\FieldLibrary;
 use App\Services\Admin\FormEditor;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -23,7 +24,8 @@ class FormController
             ->withCount(['submissions' => fn ($q) => $q->where('retain', true)])
             ->latest('updated_at')->orderByDesc('id')->paginate(25)->withQueryString();
 
-        return view('admin.forms', compact('forms', 'archived'));
+        $pendingThemes = Theme::whereNotNull('import_report')->whereNull('reviewed_at')->pluck('slug')->flip();
+        return view('admin.forms', compact('forms', 'archived', 'pendingThemes'));
     }
 
     public function create(Request $request)
@@ -54,8 +56,10 @@ class FormController
     public function edit(Form $form)
     {
         abort_if($form->archived_at, 404);
+        $definition = $this->editor->draft($form);
         return view('admin.editor', [
-            'form' => $form, 'library' => FieldLibrary::all(), 'definition' => $this->editor->draft($form), 'version' => $this->editor->version($form),
+            'form' => $form, 'library' => FieldLibrary::all(), 'definition' => $definition, 'version' => $this->editor->version($form),
+            'pendingTheme' => Theme::where('slug', $definition['settings']['theme_name'] ?? 'one_column')->first()?->pendingReview(),
         ]);
     }
 
@@ -103,7 +107,7 @@ class FormController
             $definition = $this->editor->draft($form);
             $this->editor->checkPublish($definition, $form);
             $definition['settings']['view_flag'] = 1;
-            $form->fill(['revision' => $form->revision + 1, 'definition' => $definition, 'draft_definition' => null, 'published' => true]);
+            $form->fill(['revision' => $form->revision + 1, 'definition' => $definition, 'draft_definition' => null, 'published' => true, 'awaiting_theme_publication' => false]);
             $this->saveIdentity($form, $definition);
             $form->revisions()->create(['revision' => $form->revision, 'definition' => $definition]);
         });
@@ -117,7 +121,7 @@ class FormController
             $form = Form::lockForUpdate()->findOrFail($form->id);
             abort_if($form->archived_at, 404);
             $this->editor->checkVersion($request, $form);
-            $form->update(['published' => false]);
+            $form->update(['published' => false, 'awaiting_theme_publication' => false]);
         });
 
         return redirect()->route('admin.edit', $form)->with('notice', '公開を停止しました。');
@@ -132,7 +136,7 @@ class FormController
             if ($current->published) {
                 throw ValidationException::withMessages(['form' => '先にフォームの公開を停止してください。']);
             }
-            $current->forceFill(['archived_at' => now()])->save();
+            $current->forceFill(['archived_at' => now(), 'awaiting_theme_publication' => false])->save();
         });
 
         return redirect()->route('admin.forms')->with('notice', 'フォームを保管しました。受信履歴と配信記録は引き続き確認できます。');

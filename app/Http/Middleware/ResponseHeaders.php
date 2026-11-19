@@ -20,6 +20,11 @@ class ResponseHeaders
         $response->headers->set('Referrer-Policy', 'same-origin');
         $response->headers->set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
         $response->headers->set('Cache-Control', 'private, no-store');
+        if (request()->routeIs('theme.asset')) {
+            $response->headers->set('Content-Security-Policy', "sandbox; default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+            $response->headers->set('Cross-Origin-Resource-Policy', 'same-origin');
+            return $response;
+        }
         $external = '';
         $frames = "'none'";
         if (\App\Services\SpamProtection::configured() && !request()->is('admin', 'admin/*')) {

@@ -3,6 +3,7 @@
 namespace App\Services\Admin;
 
 use App\Models\Form;
+use App\Models\Theme;
 use App\Services\EasyMail\FormAudit;
 use App\Services\FieldLibrary;
 use App\Services\PublicFormUrl;
@@ -86,7 +87,7 @@ class FormEditor
 
     public function version(Form $form): string
     {
-        return hash('sha256', serialize([$form->revision, $form->published, $form->archived_at, $this->draft($form)]));
+        return hash('sha256', serialize([$form->revision, $form->published, (bool) $form->awaiting_theme_publication, $form->archived_at, $this->draft($form)]));
     }
 
     public function checkVersion(Request $request, Form $form): void
@@ -250,6 +251,9 @@ class FormEditor
         }
         $settings = $definition['settings'];
         $this->checkSlug((string) ($settings['url'] ?? $form->slug), $form);
+        if (Theme::where('slug', $settings['theme_name'] ?? 'one_column')->first()?->pendingReview()) {
+            throw ValidationException::withMessages(['definition' => '管理者が移行テーマの確認を完了してから公開してください。']);
+        }
         $issues = $this->audit($definition);
         if ($issues) {
             throw ValidationException::withMessages(['definition' => $issues]);

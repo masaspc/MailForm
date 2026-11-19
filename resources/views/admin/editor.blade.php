@@ -75,12 +75,19 @@
 </form>
 @if($form)
 <section class="panel stack" id="publish"><h2>公開設定</h2>
+    @if($pendingTheme)
+    <p>移行テーマの確認待ちです。@if(auth()->user()->role === 'admin')<a class="text-link" href="{{ route('admin.themes.edit', $settings['theme_name'] ?? 'one_column') }}">テーマを確認</a>@endif</p>
+    @else
     <p>保存済みの版を公開します。@if($form->published)現在の公開パスは <a class="text-link" href="{{ $form->publicPath() }}">{{ $form->publicPath() }}</a> です。@endif</p>
+    @endif
     <div class="actions">
-        @if(!$form->published || $form->draft_definition)<form method="post" action="{{ route('admin.publish', $form) }}" data-saved-action>@csrf
+        @if(!$pendingTheme || auth()->user()->role === 'admin')<a class="btn" href="{{ route('admin.preview', $form) }}">保存済みのプレビュー</a>@endif
+        @if(!$pendingTheme && (!$form->published || $form->draft_definition))<form method="post" action="{{ route('admin.publish', $form) }}" data-saved-action>@csrf
         <input type="hidden" name="version" value="{{ $version }}"><button class="primary">保存済みの内容を公開</button></form>@endif
         @if($form->published)<form method="post" action="{{ route('admin.unpublish', $form) }}" data-confirm="公開を停止すると、このURLから回答できなくなります。公開を停止しますか？">@csrf
-        <input type="hidden" name="version" value="{{ $version }}"><button class="btn danger">公開を停止</button></form>@endif
+        <input type="hidden" name="version" value="{{ $version }}"><button class="btn danger">公開を停止</button></form>
+        @elseif($form->awaiting_theme_publication)<form method="post" action="{{ route('admin.unpublish', $form) }}">@csrf
+        <input type="hidden" name="version" value="{{ $version }}"><button class="btn">テーマ確認後も非公開にする</button></form>@endif
         <form method="post" action="{{ route('admin.copy', $form) }}" data-saved-action>@csrf<button class="btn">フォームを複製</button></form>
     </div>
     @if(auth()->user()->role === 'admin' && !$form->published)

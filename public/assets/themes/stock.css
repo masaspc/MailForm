@@ -3,6 +3,8 @@
 body {--accent:#237949; --wash:#f2f5f2; min-height:100vh;}
 .site-banner {background:#ccc; text-align:center; padding:1.85rem 1rem; font-size:1.85rem; font-weight:bold;}
 .site-footer {background:#eee; text-align:center; padding:.85rem; margin-top:3.5rem; font-size:.8rem;}
+.site-banner img, .site-footer img {max-width:100%; height:auto; vertical-align:middle;}
+:where(img[data-theme-logo]) {max-height:5rem; object-fit:contain;}
 main {max-width:60rem; border:0; border-radius:0; padding:0 1.5rem; margin:3.25rem auto;}
 main header {text-align:center;}
 h1 {font-size:1.7rem; color:var(--accent);}
@@ -26,6 +28,7 @@ body.theme-gray {--accent:#343a40; --wash:#f5f6f7;}
 .theme-gray .primary {color:white; background:#343a40; border-radius:.25rem;}
 .theme-gradation {--accent:#285c72; background:#f1f1f1;}
 .theme-gradation .site-banner {color:white; background:linear-gradient(105deg,#28546b,#78c4be); text-align:left; padding:3.5rem max(6vw,1.5rem);}
+.theme-gradation:where([data-imported-css]) .site-banner {background:#28546b;}
 .theme-gradation main {background:white; border-radius:.5rem; padding:clamp(1.3rem,5vw,3.5rem); max-width:62rem; margin:2rem auto;}
 .theme-gradation main header {text-align:left;}
 .theme-gradation input:not([type=checkbox],[type=radio]),.theme-gradation textarea,.theme-gradation select {background:#fff; border-bottom:1px solid #abb7b9;}

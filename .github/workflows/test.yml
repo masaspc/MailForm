@@ -42,7 +42,12 @@ jobs:
           php -l deploy/almalinux10/target.php
           bash deploy/almalinux10/setup.sh --help
           bash deploy/almalinux10/import-backup.sh --help
+          bash tests/deploy/restore-warnings.sh
+          bash tests/deploy/preview-update.sh
       - run: composer install --prefer-dist --no-progress --no-interaction
+      - name: Test the private production theme review server
+        if: matrix.php == '8.4' && matrix.database.image == 'mariadb:11.8'
+        run: bash tests/deploy/review-router.sh
       - run: composer validate --strict && composer audit
       - run: cp .env.example .env && vendor/bin/phpunit
         env:
@@ -53,26 +58,29 @@ jobs:
           DB_USERNAME: root
           DB_PASSWORD: ci-only
       - name: Check the official EasyMail 2.00 files for this rehearsal
-        if: matrix.database.image == 'mariadb:11.8'
+        if: matrix.database.driver == 'mariadb'
         env:
-          SOURCE_VERSION: ${{ matrix.php == '8.4' && '2.00.125' || '2.00.124' }}
+          CI_DATABASE: ${{ matrix.database.image }}
+          CI_PHP: ${{ matrix.php }}
         run: |
-          case "$SOURCE_VERSION" in
-            2.00.124) digest=e6feee0db39b76264c821eef2b545d64e048853bc0d1dd651e07e95c2b7d51fc ;;
-            2.00.125) digest=cd5ca372d19b64450107c4014ff6c31b8a8d50cf84822d7fa54d797cd171b4e1 ;;
+          case "$CI_DATABASE/$CI_PHP" in
+            mariadb:11.8/8.4) SOURCE_VERSION=2.00.125; base=EasyMail_2.00.125/em_laravel; digest=cd5ca372d19b64450107c4014ff6c31b8a8d50cf84822d7fa54d797cd171b4e1 ;;
+            mariadb:11.8/8.5) SOURCE_VERSION=2.00.124; base=EasyMail_2.00.124/em_laravel; digest=e6feee0db39b76264c821eef2b545d64e048853bc0d1dd651e07e95c2b7d51fc ;;
+            mariadb:11.4/8.4) SOURCE_VERSION=2.00.133; base=EasyMail/em_laravel; digest=2ea1a3f930cd239f0484ef2c31e0bb7ad5c4b9e5c71c4cf4f565c17abb22d895 ;;
+            mariadb:11.4/8.5) SOURCE_VERSION=2.01.004; base=EasyMail; digest=0305d8407b7e4afb10418ae221f96e6072fbd82768ccbaa2d461d4ae07e68dd7 ;;
             *) exit 1 ;;
           esac
           archive="$RUNNER_TEMP/EasyMail_$SOURCE_VERSION.zip"
           curl --proto '=https' --fail --silent --show-error --location --retry 3 --max-time 90 \
             "https://www.mubag.com/download/$SOURCE_VERSION/EasyMail_$SOURCE_VERSION.zip" -o "$archive"
           printf '%s  %s\n' "$digest" "$archive" | sha256sum --check
-          base="EasyMail_$SOURCE_VERSION/em_laravel"
           unzip -q "$archive" "$base/config/app.php" "$base/config/append.php" "$base/routes/web.php" \
             "$base/app/Http/Controllers/IndexController.php" "$base/app/Library/Common.php" "$base/app/Mail/ContactMail.php" \
             "$base/resources/views/theme/*" "$base/resources/lang/*" -d "$RUNNER_TEMP"
           jq -r 'to_entries[] | "\(.value)  \(.key)"' "resources/easymail/$SOURCE_VERSION-sha256.json" | \
             (cd "$RUNNER_TEMP/$base" && sha256sum --check --quiet)
           echo "EASYMAIL_SOURCE_ROOT=$RUNNER_TEMP/$base" >> "$GITHUB_ENV"
+          echo "EASYMAIL_SOURCE_VERSION=$SOURCE_VERSION" >> "$GITHUB_ENV"
       - name: Rehearse a second snapshot from a read-only legacy database
         env:
           CONTAINER_ID: ${{ job.services.database.id }}
@@ -103,12 +111,14 @@ jobs:
           php artisan migrate --force
           options=(--source-version=2.01.004)
           if [[ -n ${EASYMAIL_SOURCE_ROOT:-} ]]; then
-            db easymail_snapshot <<'SQL'
-          CREATE TABLE migrations (migration VARCHAR(255));
-          INSERT INTO migrations VALUES ('2020_02_20_174440_create_forms_table');
-          CREATE TABLE cache (`key` VARCHAR(255), value TEXT, expiration INTEGER);
-          UPDATE histories SET attach_files = CONCAT(REPEAT('a', 40), '.txt') WHERE id = 80;
-          SQL
+            db easymail_snapshot -e 'CREATE TABLE migrations (migration VARCHAR(255))'
+            if [[ $EASYMAIL_SOURCE_VERSION == 2.00.* ]]; then
+              db easymail_snapshot -e "INSERT INTO migrations VALUES ('2020_02_20_174440_create_forms_table')"
+              db easymail_snapshot -e 'CREATE TABLE cache (`key` VARCHAR(255), value TEXT, expiration INTEGER)'
+            else
+              db easymail_snapshot -e "INSERT INTO migrations VALUES ('2022_12_14_071441_create_forms_table')"
+            fi
+            db easymail_snapshot -e "UPDATE histories SET attach_files = CONCAT(REPEAT('a', 40), '.txt') WHERE id = 80"
             files="$EASYMAIL_SOURCE_ROOT/storage/app/attach_file"
             mkdir -p "$files"
             printf 'fixture' > "$files/$(printf 'a%.0s' {1..40}).txt"
@@ -128,3 +138,12 @@ jobs:
           import > "$RUNNER_TEMP/final.json"
           import --verify-only | jq -e '.reconciliation.ok and .reconciliation.forms[0].source.matched == 2'
           php artisan mailform:handoff --require-empty
+          if [[ -n ${EASYMAIL_SOURCE_ROOT:-} ]]; then
+            bash tests/Fixtures/make-custom-theme.sh "$EASYMAIL_SOURCE_ROOT"
+            db easymail_snapshot -e "UPDATE forms SET theme_name='garden_example'"
+            import --dry-run | jq -e '.themes.garden_example.layout == "gradation" and .forms[0].theme_review == "pending" and (.forms[0].published | not)'
+            import | jq -e '.themes.garden_example.changes.added | index("js/ad_cookie.js") != null'
+            import --verify-only | jq -e '.reconciliation.ok and (.forms[0].same_public_url | not)'
+            php -r 'require "vendor/autoload.php"; $app = require "bootstrap/app.php"; $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap(); $theme = App\Models\Theme::whereSlug("garden_example")->sole(); exit($theme->logo === "images/garden.svg" && $theme->approveForPublication() === 1 ? 0 : 1);'
+            import --verify-only | jq -e '.reconciliation.ok and .forms[0].same_public_url'
+          fi

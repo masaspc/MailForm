@@ -6,9 +6,11 @@ umask 077
 
 usage() {
     cat <<'HELP'
-使い方  sudo bash deploy/almalinux10/setup.sh [preview|production|open]
+使い方  sudo bash deploy/almalinux10/setup.sh [preview|update-preview|production|review-themes|open]
   preview      SSH経由で開く練習環境を作ります（省略時）。
+  update-preview  練習DBをバックアップし、練習環境を選択中の新しい版に更新します。
   production   練習データを退避し、同じ版で本番の最終取込を準備します。
+  review-themes  本番受付と配信を停止したまま、SSH 経由でテーマを確認します。
   open         最終取込・SMTP接続を確認し、新サーバーの受付と配信を開始します。
 対象は新規の専用 AlmaLinux 10.3 Minimal です。最初の Git コピーから実行してください。
 HELP
@@ -96,8 +98,7 @@ show_production() {
     printf '最終取込・照合、SMTPの接続確認、受付先の切替は docs/ALMALINUX10.md の「切替当日」へ進んでください。\n'
 }
 
-archive_preview() {
-    local hold=/srv/mailform/rehearsal
+quiesce_preview() {
     install -m 0644 /dev/null /etc/nginx/mailform/maintenance
     restorecon /etc/nginx/mailform/maintenance
     systemctl disable --now mailform-schedule.timer
@@ -105,9 +106,23 @@ archive_preview() {
     while [[ $(systemctl show -p ActiveState --value mailform-schedule.service) =~ ^(activating|active|deactivating)$ ]] ||
         pgrep -f '^php-fpm: pool mailform([[:space:]]|$)' >/dev/null; do sleep 1; done
     systemctl stop php-fpm
+}
+
+archive_preview() {
+    local hold=/srv/mailform/rehearsal marker former cache
+    quiesce_preview
+    snapshot_themes
     install -d -m 0700 "$hold"
     if [[ ! -d $hold/shared ]]; then mv -T /srv/mailform/shared "$hold/shared"; fi
     if [[ ! -d $hold/bootstrap-cache ]]; then mv -T "$release/bootstrap/cache" "$hold/bootstrap-cache"; fi
+    # Earlier rehearsal releases also cached the old APP_KEY before update-preview switched current.
+    for marker in "$state"/release-*; do
+        former=${marker##*/release-}
+        [[ $former != "$revision" && $former =~ ^[0-9a-f]{40}$ ]] || continue
+        cache="/srv/mailform/releases/$former/bootstrap/cache"
+        if [[ -d $cache && ! -e $hold/cache-$former ]]; then mv -T "$cache" "$hold/cache-$former"; fi
+    done
+    archive_stage_grant
 }
 
 open_production() {
@@ -156,7 +171,7 @@ open_production() {
 
 case ${1:-preview} in
     --help|-h) usage; exit 0 ;;
-    preview|production|open) mode=${1:-preview} ;;
+    preview|update-preview|production|review-themes|open) mode=${1:-preview} ;;
     *) usage >&2; exit 2 ;;
 esac
 [[ $# -le 1 ]] || { usage >&2; exit 2; }
@@ -178,14 +193,21 @@ if [[ ! -e $state ]]; then
     new_state
 fi
 [[ -d $state && ! -L $state && $(stat -c '%u:%a' "$state") == 0:700 && -s $state/phase ]] || die '既存の設置記録を確認してください。'
-[[ $(< "$state/revision") == "$revision" ]] || die "最初に設置した版 $(< "$state/revision") を git switch --detach で選び直してください。"
+[[ $mode == update-preview || $(< "$state/revision") == "$revision" ]] ||
+    die "確認済みの版 $(< "$state/revision") を git switch --detach で選び直してください。練習環境の更新は update-preview を使います。"
 parse_url "$(< "$state/base-url")" || die '保存された設置URLを確認してください。'
 release=/srv/mailform/releases/$revision
 # shellcheck source=setup-core.sh
 source "$repo/deploy/almalinux10/setup-core.sh"
 # shellcheck source=setup-web.sh
 source "$repo/deploy/almalinux10/setup-web.sh"
+# shellcheck source=setup-themes.sh
+source "$repo/deploy/almalinux10/setup-themes.sh"
+# shellcheck source=setup-update.sh
+source "$repo/deploy/almalinux10/setup-update.sh"
 phase=$(< "$state/phase")
+if [[ $mode == update-preview ]]; then update_preview; exit 0; fi
+if [[ $mode == review-themes ]]; then review_themes; exit 0; fi
 if [[ $mode == open ]]; then open_production; exit 0; fi
 if [[ $mode == preview ]]; then
     case $phase in
@@ -234,6 +256,7 @@ key_file=$(< "$state/key-path")
 validate_production_tls
 archive_preview
 provision_production
+restore_themes
 ensure_admin
 prepare_production_web
 sudo -u mailform php "$release/artisan" mailform:handoff --require-empty
